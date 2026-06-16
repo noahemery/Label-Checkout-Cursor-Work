@@ -37,11 +37,16 @@ export function AdminModal({ open, onClose }: AdminModalProps) {
   if (!open) return null;
 
   return (
-    <div className="modal-backdrop">
-      <div className="modal">
-        <div className="modal-header">
-          <h2>Admin</h2>
-          <nav className="tabs">
+    <div className="modal-backdrop modal-backdrop-admin" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-admin" role="dialog" aria-labelledby="admin-modal-title">
+        <div className="modal-header modal-header-admin">
+          <div className="modal-header-top">
+            <h2 id="admin-modal-title">Admin</h2>
+            <button className="btn btn-ghost modal-close" onClick={onClose}>
+              Close
+            </button>
+          </div>
+          <nav className="tabs tabs-admin" aria-label="Admin sections">
             <button
               className={tab === 'batches' ? 'tab tab-active' : 'tab'}
               onClick={() => setTab('batches')}
@@ -61,11 +66,8 @@ export function AdminModal({ open, onClose }: AdminModalProps) {
               Settings
             </button>
           </nav>
-          <button className="btn btn-ghost modal-close" onClick={onClose}>
-            Close
-          </button>
         </div>
-        <div className="modal-body" ref={bodyRef}>
+        <div className="modal-body modal-body-admin" ref={bodyRef}>
           {tab === 'batches' && <BatchesTab />}
           {tab === 'operators' && <OperatorsTab />}
           {tab === 'settings' && <SettingsTab />}
@@ -78,8 +80,8 @@ export function AdminModal({ open, onClose }: AdminModalProps) {
 // ---- Batches ---------------------------------------------------------
 
 function BatchesTab() {
-  const { store, batches, refreshBatches, logAudit } = useAppData();
-  const { activePage, activePageId } = useSheetPage();
+  const { store, refreshBatches, logAudit } = useAppData();
+  const { activePage, activePageId, pageBatches } = useSheetPage();
   const { operator } = useSession();
   const emptyForm = {
     batchNumber: '',
@@ -93,6 +95,10 @@ function BatchesTab() {
   };
   const [form, setForm] = useState(emptyForm);
   const [message, setMessage] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; batchNumber: string } | null>(
+    null,
+  );
+  const [confirmText, setConfirmText] = useState('');
 
   const setField = (field: keyof typeof form, value: string) =>
     setForm((f) => ({ ...f, [field]: value }));
@@ -148,17 +154,37 @@ function BatchesTab() {
     setMessage(`Imported ${result.added} batches (${result.skipped} skipped).`);
   };
 
-  const deleteBatch = async (batchId: string, batchNumber: string) => {
-    await store.deleteBatch(batchId);
+  const deleteBatch = async () => {
+    if (!pendingDelete) return;
+    const { id, batchNumber } = pendingDelete;
+    await store.deleteBatch(id);
     await refreshBatches();
     await logAudit({
       type: 'batch_delete',
       operatorId: operator?.id ?? null,
       operatorName: operator?.name ?? null,
       batchNumber,
-      detail: 'Batch deleted in Admin',
+      detail: 'Batch removed in Admin (confirmed)',
     });
+    setPendingDelete(null);
+    setConfirmText('');
+    setMessage(`Removed batch ${batchNumber}. Use D365 import or Reset sheet to restore catalog rows.`);
   };
+
+  const startDelete = (id: string, batchNumber: string) => {
+    setPendingDelete({ id, batchNumber });
+    setConfirmText('');
+    setMessage(null);
+  };
+
+  const cancelDelete = () => {
+    setPendingDelete(null);
+    setConfirmText('');
+  };
+
+  const deleteConfirmOk =
+    pendingDelete !== null &&
+    confirmText.trim().toUpperCase() === pendingDelete.batchNumber.trim().toUpperCase();
 
   return (
     <div className="admin-section">
@@ -243,19 +269,60 @@ function BatchesTab() {
 
       {message && <div className="admin-message">{message}</div>}
 
-      <h3>Batches ({batches.length})</h3>
+      {pendingDelete && (
+        <div className="admin-delete-confirm">
+          <p className="admin-delete-warn">
+            Remove batch <strong>{pendingDelete.batchNumber}</strong>? Check-out memory for this row
+            will be lost. Type the batch number below to confirm.
+          </p>
+          <input
+            className="admin-delete-input"
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            placeholder={pendingDelete.batchNumber}
+            autoComplete="off"
+          />
+          <div className="admin-delete-actions">
+            <button type="button" className="btn btn-ghost" onClick={cancelDelete}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={!deleteConfirmOk}
+              onClick={() => void deleteBatch()}
+            >
+              Remove batch
+            </button>
+          </div>
+        </div>
+      )}
+
+      <h3>
+        Batches on {activePage.referenceNumber} ({pageBatches.length})
+      </h3>
+      <p className="admin-hint">
+        Only batches on the active log sheet are listed. To wipe an entire sheet, use{' '}
+        <strong>Reset sheet…</strong> on the main screen.
+      </p>
       <div className="admin-list">
-        {batches.map((b) => (
+        {pageBatches.map((b) => (
           <div key={b.id} className="admin-list-row">
             <span className={`status-pill status-${b.status}`}>{b.status}</span>
             <span className="admin-list-main">{b.batchNumber}</span>
             <span className="admin-list-dim">{b.labelCode ?? ''}</span>
-            <button
-              className="btn btn-danger btn-sm"
-              onClick={() => void deleteBatch(b.id, b.batchNumber)}
-            >
-              Delete
-            </button>
+            {pendingDelete?.id === b.id ? (
+              <span className="admin-list-pending">Confirming…</span>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm admin-remove-btn"
+                disabled={!!pendingDelete}
+                onClick={() => startDelete(b.id, b.batchNumber)}
+              >
+                Remove…
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -294,16 +361,21 @@ function OperatorsTab() {
     }
   };
 
-  const remove = async (operatorId: string, operatorName: string) => {
-    await store.removeOperator(operatorId);
+  const [pendingRemove, setPendingRemove] = useState<{ id: string; name: string } | null>(null);
+
+  const remove = async () => {
+    if (!pendingRemove) return;
+    await store.removeOperator(pendingRemove.id);
     await refreshOperators();
     await logAudit({
       type: 'operator_removed',
       operatorId: operator?.id ?? null,
       operatorName: operator?.name ?? null,
       batchNumber: null,
-      detail: `Operator removed: ${operatorName}`,
+      detail: `Operator removed: ${pendingRemove.name}`,
     });
+    setPendingRemove(null);
+    setMessage(`Removed ${pendingRemove.name}.`);
   };
 
   return (
@@ -334,13 +406,33 @@ function OperatorsTab() {
       {message && <div className="admin-message">{message}</div>}
 
       <h3>Enrolled operators ({operators.length})</h3>
+      {pendingRemove && (
+        <div className="admin-delete-confirm">
+          <p className="admin-delete-warn">
+            Remove operator <strong>{pendingRemove.name}</strong>?
+          </p>
+          <div className="admin-delete-actions">
+            <button type="button" className="btn btn-ghost" onClick={() => setPendingRemove(null)}>
+              Cancel
+            </button>
+            <button type="button" className="btn btn-danger btn-sm" onClick={() => void remove()}>
+              Remove operator
+            </button>
+          </div>
+        </div>
+      )}
       <div className="admin-list">
         {operators.map((op) => (
           <div key={op.id} className="admin-list-row">
             <span className="admin-list-main">{op.name}</span>
             <span className="admin-list-dim">badge {op.badgeIdNorm}</span>
-            <button className="btn btn-danger btn-sm" onClick={() => void remove(op.id, op.name)}>
-              Remove
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm admin-remove-btn"
+              disabled={!!pendingRemove}
+              onClick={() => setPendingRemove({ id: op.id, name: op.name })}
+            >
+              Remove…
             </button>
           </div>
         ))}
