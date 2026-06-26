@@ -5,7 +5,7 @@ import { cleanPayload, normalizeId } from './normalize';
  *
  *   Sheet row QR:   FMIB001|1|{batch}|{item}|{labelCode}|{qty}|{DOM}|{DOE}
  *   Label QR:       LBL|1|{batch}|{item}|{labelCode}
- *   Badge:          matched by configurable pattern (default: 6-14 digits)
+ *   Badge:          matched by configurable pattern (default: 5–14 digits)
  *   Anything else:  raw identifier (1D batch barcode, UPC, hand-typed batch)
  */
 

@@ -11,7 +11,8 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  badgePattern: '^\\d{6,10}$',
+  /** Alltech prox badges are often 5 digits (e.g. 13925). */
+  badgePattern: '^\\d{5,14}$',
   burstGapMs: 40,
   commitPauseMs: 250,
   autoAdvanceMs: 2500,
@@ -24,7 +25,14 @@ export function loadSettings(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<AppSettings>) };
+    const saved = JSON.parse(raw) as Partial<AppSettings>;
+    const merged = { ...DEFAULT_SETTINGS, ...saved };
+    // Upgrade legacy default that rejected 5-digit prox badges.
+    if (merged.badgePattern === '^\\d{6,10}$') {
+      merged.badgePattern = DEFAULT_SETTINGS.badgePattern;
+      saveSettings(merged);
+    }
+    return merged;
   } catch {
     return DEFAULT_SETTINGS;
   }

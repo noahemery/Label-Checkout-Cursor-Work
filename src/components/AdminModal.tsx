@@ -457,7 +457,7 @@ function SettingsTab() {
             onChange={(e) => updateSettings({ badgePattern: e.target.value })}
           />
           <span className="admin-hint">
-            Payloads matching this are treated as badge scans. Default: 6–14 digits.
+            Payloads matching this are treated as badge scans. Default: 5–14 digits (e.g. 13925).
           </span>
         </label>
         <label>
