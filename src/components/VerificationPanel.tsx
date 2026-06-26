@@ -1,5 +1,6 @@
+import { sideComplete } from '../domain/matching';
 import type { SlotNeed, VerificationState } from '../verification/useVerification';
-import { ScanSlot } from './ScanSlot';
+import { ScanSlot, type SlotVisualPhase } from './ScanSlot';
 
 interface VerificationPanelProps {
   state: VerificationState;
@@ -8,41 +9,91 @@ interface VerificationPanelProps {
   onStartOver: () => void;
 }
 
-function instruction(need: SlotNeed): { main: string; sub: string } {
+function instruction(need: SlotNeed): { primary: string; sub: string } {
   if (need.side === 'label' && need.need === 'batch')
     return {
-      main: 'Scan the PRINTED LABEL',
-      sub: 'the BATCH NUMBER barcode at the bottom of the label',
+      primary: 'Scan the batch number on the printed label',
+      sub: 'Use the batch barcode at the bottom of the label',
     };
   if (need.side === 'label' && need.need === 'code')
     return {
-      main: 'Now the LABEL CODE',
-      sub: 'scan the QR code on the label, or type the code',
+      primary: 'Scan the label code (QR)',
+      sub: 'Or type the code and press Enter',
     };
   if (need.side === 'sheet' && need.need === 'batch')
     return {
-      main: 'Now the LOG SHEET row',
-      sub: 'no QR on the sheet yet — scan the label\u2019s batch barcode again to simulate it, or type the batch number from the sheet',
+      primary: 'Now scan the matching row on the log sheet',
+      sub: 'Scan the sheet row barcode, or type the batch number from the sheet',
     };
   if (need.side === 'sheet' && need.need === 'code')
     return {
-      main: 'Confirm the LABEL CODE',
-      sub: 'scan the label QR again, or type the code written on the sheet row',
+      primary: 'Confirm the label code on the sheet row',
+      sub: 'Scan the label QR again, or type the code written on the sheet',
     };
-  return { main: '', sub: '' };
+  return { primary: '', sub: '' };
+}
+
+function labelPhase(
+  labelDone: boolean,
+  need: SlotNeed,
+  verified: boolean,
+): SlotVisualPhase {
+  if (verified && labelDone) return 'complete';
+  if (need.side === 'label') return 'active';
+  if (labelDone) return 'complete';
+  return 'active';
+}
+
+function sheetPhase(
+  labelDone: boolean,
+  sheetDone: boolean,
+  need: SlotNeed,
+  verified: boolean,
+): SlotVisualPhase {
+  if (!labelDone) return 'locked';
+  if (verified && sheetDone) return 'complete';
+  if (need.side === 'sheet') return 'active';
+  if (sheetDone) return 'complete';
+  return 'locked';
 }
 
 export function VerificationPanel({ state, need, typedBuffer, onStartOver }: VerificationPanelProps) {
   const verified = !!state.result?.ok;
+  const labelDone = sideComplete(state.label);
+  const sheetDone = sideComplete(state.sheet);
   const inProgress =
     !state.result && (!!state.label.batchNumber || !!state.sheet.batchNumber || !!typedBuffer);
+
+  const labelVisual = labelPhase(labelDone, need, verified);
+  const sheetVisual = sheetPhase(labelDone, sheetDone, need, verified);
+  const hint = instruction(need);
+
+  const labelHint =
+    labelVisual === 'active'
+      ? { primary: hint.primary, sub: hint.sub }
+      : { primary: undefined, sub: undefined };
+
+  const sheetHint =
+    sheetVisual === 'active'
+      ? {
+          primary:
+            need.side === 'sheet' && need.need === 'batch' && !state.sheet.batchNumber
+              ? 'Now scan the matching row on the log sheet'
+              : hint.primary,
+          sub: hint.sub,
+        }
+      : { primary: undefined, sub: undefined };
+
+  const showStartOver = inProgress && !verified && !state.notice;
 
   return (
     <div className="verification zone-panel">
       <header className="scan-zone-head">
         <span className="zone-tag">Scan zone</span>
-        <h2 className="zone-title">Two-scan check-out</h2>
-        <p className="zone-desc">Printed label first, then log sheet row — both must match.</p>
+        <h2 className="zone-title">Scan two barcodes to verify a label</h2>
+        <p className="zone-desc">
+          Scan the printed label first, then the matching row on the log sheet.
+        </p>
       </header>
       <div className="slots">
         <ScanSlot
@@ -52,10 +103,12 @@ export function VerificationPanel({ state, need, typedBuffer, onStartOver }: Ver
           side={state.label}
           activeNeed={need.side === 'label' ? need.need : null}
           typedBuffer={need.side === 'label' ? typedBuffer : ''}
-          verified={verified}
+          visualPhase={labelVisual}
+          inlinePrimary={labelHint.primary}
+          inlineSub={labelHint.sub}
         />
         <div className={`slots-link ${verified ? 'slots-link-ok' : ''}`}>
-          {verified ? '=' : '→'}
+          {verified ? '✓' : '→'}
         </div>
         <ScanSlot
           step={2}
@@ -64,7 +117,10 @@ export function VerificationPanel({ state, need, typedBuffer, onStartOver }: Ver
           side={state.sheet}
           activeNeed={need.side === 'sheet' ? need.need : null}
           typedBuffer={need.side === 'sheet' ? typedBuffer : ''}
-          verified={verified}
+          visualPhase={sheetVisual}
+          inlinePrimary={sheetHint.primary}
+          inlineSub={sheetHint.sub}
+          lockedHint="Step 2 — after label scan"
         />
       </div>
 
@@ -76,19 +132,13 @@ export function VerificationPanel({ state, need, typedBuffer, onStartOver }: Ver
         </div>
       ) : state.notice ? (
         <div className="verdict verdict-waiting verdict-notice">{state.notice}</div>
-      ) : (
-        <div className="verdict verdict-waiting">
-          <div className="verdict-lines">
-            <div>{instruction(need).main}</div>
-            <div className="verdict-subline">{instruction(need).sub}</div>
-          </div>
-          {inProgress && (
-            <button className="btn btn-ghost verdict-reset" onClick={onStartOver}>
-              Start over
-            </button>
-          )}
+      ) : showStartOver ? (
+        <div className="verdict verdict-actions">
+          <button className="btn btn-ghost verdict-reset" onClick={onStartOver}>
+            Start over
+          </button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

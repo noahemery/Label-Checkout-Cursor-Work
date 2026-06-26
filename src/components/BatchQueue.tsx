@@ -63,6 +63,7 @@ export function BatchQueue() {
 
   const pct =
     pageBatches.length > 0 ? Math.round((verifiedCount / pageBatches.length) * 100) : 0;
+  const totalLabels = pageBatches.length;
 
   return (
     <section className="queue zone-panel">
@@ -72,29 +73,34 @@ export function BatchQueue() {
           <h2 className="zone-title">Today&rsquo;s check-outs</h2>
         </div>
         <div className="queue-header-right">
-          <div className="progress-ring-wrap" title={`${verifiedCount} of ${pageBatches.length} verified`}>
-            <svg className="progress-ring" viewBox="0 0 36 36">
-              <path
-                className="progress-ring-bg"
-                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-              />
-              <path
-                className="progress-ring-fill"
-                strokeDasharray={`${pct}, 100`}
-                d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-              />
-            </svg>
-            <span className="progress-ring-label">{pct}%</span>
+          <div className="queue-progress-summary">
+            <div
+              className="progress-ring-wrap"
+              title={`${verifiedCount} of ${totalLabels} labels checked today`}
+            >
+              <svg className="progress-ring" viewBox="0 0 36 36">
+                <path
+                  className="progress-ring-bg"
+                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                />
+                <path
+                  className="progress-ring-fill"
+                  strokeDasharray={`${pct}, 100`}
+                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                />
+              </svg>
+              <span className="progress-ring-label">
+                {verifiedCount}/{totalLabels || 0}
+              </span>
+            </div>
+            <p className="queue-progress-text">
+              <strong>{verifiedCount}</strong> of <strong>{totalLabels}</strong> labels checked
+              today
+            </p>
           </div>
-          <div className="queue-stats">
-            <span className="stat-chip stat-verified">{verifiedCount} verified</span>
-            <span className="stat-chip stat-waiting">
-              {pageBatches.length - verifiedCount - flaggedCount} waiting
-            </span>
-            {flaggedCount > 0 && (
-              <span className="stat-chip stat-flagged">{flaggedCount} flagged</span>
-            )}
-          </div>
+          {flaggedCount > 0 && (
+            <span className="stat-chip stat-flagged">{flaggedCount} flagged</span>
+          )}
           {operator && (
             <button className="btn btn-ghost btn-sm" onClick={() => setSheetLabelsOpen(true)}>
               View sheet

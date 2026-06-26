@@ -633,11 +633,32 @@ body {
 
 .slot-active {
   border-color: var(--amber);
-  box-shadow: 0 0 40px rgba(245, 166, 35, 0.25);
+  box-shadow: 0 0 40px rgba(240, 160, 32, 0.28);
+}
+
+.slot-locked {
+  opacity: 0.38;
+  pointer-events: none;
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+.slot-complete {
+  opacity: 0.72;
+  border-color: var(--green);
+  box-shadow: none;
+}
+
+.slot-complete.slot-filled {
+  border-color: var(--green);
 }
 
 .slot-filled {
   border-color: var(--blue);
+}
+
+.slot-active.slot-filled {
+  border-color: var(--amber);
 }
 
 .slot-verified {
@@ -668,6 +689,20 @@ body {
 .slot-active .slot-step {
   background: var(--amber);
   color: #1d1300;
+}
+
+.slot-step-active {
+  background: var(--amber);
+  color: #1d1300;
+}
+
+.slot-step-done {
+  background: var(--green);
+  color: #03240f;
+}
+
+.slot-header .status-lamp {
+  margin-left: auto;
 }
 
 .slot-verified .slot-step {
@@ -764,6 +799,56 @@ body {
 .tag-unknown {
   background: rgba(245, 166, 35, 0.15);
   color: var(--amber);
+}
+
+.slot-locked-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+}
+
+.slot-locked-hint {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+}
+
+.slot-scan-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+  max-width: 320px;
+}
+
+.slot-scan-icon {
+  width: 72px;
+  height: 72px;
+  color: var(--amber);
+  opacity: 0.9;
+}
+
+.slot-scan-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.slot-instruction-primary {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 800;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+.slot-instruction-sub {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--dim);
 }
 
 .slot-waiting {
@@ -868,9 +953,19 @@ body {
 
 .verdict-notice {
   background: rgba(255, 77, 77, 0.12);
+  border: 2px dashed rgba(255, 77, 77, 0.6);
   border-color: rgba(255, 77, 77, 0.6);
   color: var(--red);
   font-size: clamp(1.1rem, 2vw, 1.6rem);
+}
+
+.verdict-actions {
+  margin: 0 1.25rem 1.25rem;
+  padding: 0.5rem 0;
+  display: flex;
+  justify-content: center;
+  background: transparent;
+  border: none;
 }
 
 .verdict-ok {
@@ -1509,6 +1604,29 @@ body {
   align-items: center;
   gap: 0.65rem;
   flex-wrap: wrap;
+}
+
+.queue-progress-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.queue-progress-text {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--dim);
+  line-height: 1.35;
+}
+
+.queue-progress-text strong {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.progress-ring-label {
+  font-size: 0.58rem;
+  letter-spacing: -0.02em;
 }
 
 .queue-stats {
