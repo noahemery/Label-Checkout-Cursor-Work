@@ -2,7 +2,7 @@
 
 **Audience:** Production, quality, and operations leaders (non-technical)  
 **Presenter:** Alltech engineering intern  
-**Runtime:** ~30 minutes (22 slides + ~5 min live demo + ~3 min Q&A)
+**Runtime:** ~30 minutes (22 slides + ~3 min live demo + ~3 min Q&A)
 
 ---
 
@@ -23,7 +23,7 @@
 
 ## Opening script (~30 seconds)
 
-> "Good morning. I'm [name], engineering intern at Alltech. Over the past few weeks I built a working prototype — with help from AI tools — that gives our label room a digital double-check on top of the paper FMI B001 log. The paper binder stays. This app catches mismatches before labels hit the line and gives supervisors a record of who verified what. I'll show you how it works live in a few minutes."
+> "Good morning. I'm [name], engineering intern at Alltech. Over the past few weeks I built a working prototype — with help from AI tools — that gives our label room a digital double-check on top of the paper FMI B001 log. The paper binder stays. This app catches mismatches before labels hit the line and gives supervisors a record of who verified what. I'll show you how it works live in a few minutes." We want a little less formal than this, I am not going to explain that in depth, most of these people in the room already know who I am. In terms of the slide this is good, I still want it to be professional and have to say this stuff if needed.
 
 ---
 
@@ -51,6 +51,7 @@
 - **Claude** = conversational AI (like a very knowledgeable assistant)
 - You describe a problem in plain English; it helps draft solutions, explain tradeoffs, and refine ideas
 - It does not run the label room — **you** decide what to build and test on real hardware
+- Also explain claude code(in vs code), claude excel, claude powerpoint, claude cowork, claude design, claude skills, maybe on the side with a short explanation of each
 
 **Visual:** Simple icon: person → speech bubble → document/checklist
 
@@ -66,6 +67,7 @@
 - **Cursor** = a code editor with AI built in (think: Word for documents, but for building apps)
 - **Claude inside Cursor** helped write and adjust the app while I described label-room needs
 - **My role:** define the workflow, test with Zebra scanner and badge reader, fix what operators would find confusing
+- Explain all of the different models in cursor, I like composer 2.5, its fast and very efficient
 
 **Visual:** Diagram — You (operator workflow expert) + Cursor/Claude (draft & fix) → Working app in browser
 
@@ -128,6 +130,7 @@
 - Paper = **official binder** (unchanged)
 - Floor needs **now**: green = good to go, red = stop, impossible to miss
 - Mismatch must show **exactly** what differed (batch vs label code)
+- need to be able to track data
 
 **Visual:** Split: left = binder on shelf; right = big green/red screen on scanner station
 
@@ -160,6 +163,7 @@
 - **Scan 2:** Log sheet row for that batch
 - **Match rule:** Batch number **and** label code must agree on both sides
 - Nothing auto-filled from a database — both sides come from **physical scans**
+- we will scan all children after scanning the parent, so it is much more that 2 scans sometimes, but this helps us make sure we don't miss any children.
 
 **Visual:** Flow diagram
 
@@ -220,7 +224,7 @@ flowchart LR
 
 **Visual:** `[SCREENSHOT: Full main screen annotated with four zones]`
 
-**Speaker notes:** Dark theme on purpose — label room lighting, high contrast amber/green.
+**Speaker notes:** Dark theme on purpose(subject to change though) — label room lighting, high contrast amber/green.
 
 ---
 
@@ -248,6 +252,7 @@ flowchart LR
 - **Export CSV** — Operator, Child Batch, Parent Batch, Item, Qty, Result, Timestamp
 - **Print summary** — one-click printable report with date, shift, totals
 - Opens in Excel today — zero IT infrastructure
+- I don't think this saves though, its memory doesn't really work, but you can export a csv. If it crashes and you have to restart, your memory is gone
 
 **Visual:** `[SCREENSHOT: Activity drawer with Export CSV / Print summary]`
 
@@ -264,6 +269,7 @@ flowchart LR
 - Badge in → scan label → scan sheet → green
 - Show batch log updating
 - Optional: trigger a mismatch to show red screen
+- explain what a .bat file is and why we use it
 
 **Visual:** `[LIVE — or 4-panel screenshot storyboard if no network]`
 
@@ -290,7 +296,7 @@ flowchart LR
 
 ## Slide 17 — What is NOT production yet
 
-**Title:** Honest limits today
+**Title:** Current limits today
 
 **Bullets:**
 - **No central database** — memory lives in that browser on that PC
@@ -311,7 +317,7 @@ flowchart LR
 
 **Bullets:**
 - **Phase 1 (now):** Floor prototype, local audit, CSV export, operator feedback
-- **Phase 2:** Azure database, multi-station sync, D365 integration, IT ownership
+- **Phase 2:** Azure database, multi-station sync, D365 integration/ability to export qr code, IT ownership(what is this)
 - **Phase 3:** BarTender prints QR on each FMI B001 row at print time — sheet scan becomes one scan
 
 **Visual:** Stair-step roadmap graphic
@@ -320,13 +326,12 @@ flowchart LR
 
 ---
 
-## Slide 19 — Discussion
+## Slide 19 — Discussion (make the discussion after the summary, make this slide the last, I may delete it, so make sure the other slides will last long enough)
 
 **Title:** Questions for you
 
 **Bullets:**
 - What would supervisors need to **trust** this on the floor?
-- Which sheet / product lines should pilot first?
 - What would **IT** need for Phase 2 (hosting, Entra ID, D365 access)?
 
 **Visual:** Question marks or open floor icon

@@ -14,17 +14,17 @@ You are helping me build a 30-minute presentation slide deck for a non-technical
 ## Presentation constraints
 - Total runtime: ~30 minutes (aim for 18–22 slides + 5–8 min live demo/Q&A buffer)
 - Tone: clear, confident, practical — no jargon without a plain-English definition
-- Visual style suggestion: dark industrial theme matching the app (dark background, amber/green status colors, Alltech branding)
+- Visual style suggestion: light industrial theme matching the app (light background, amber/green status colors, Alltech branding(terracoda orange constantyly in the slides))
 - Every slide should have: a short title, 3–5 bullet max (or one simple diagram), and optional speaker notes (1–2 paragraphs per slide)
 - Do NOT assume the audience knows what code, APIs, IndexedDB, or React mean — translate everything to floor operations language
 
 ## Presenter context (use this accurately)
 - Presenter: Alltech engineering intern
-- Project: **Label Verification System** — a companion to the paper **FMI B001 "Label Log Out"** process
+- Project: **Label Verification System** — a companion to the paper **FMI B001/3 "Label Log Out"** process
 - Built using **Cursor** (AI-powered code editor) with assistance from **Claude** (AI assistant)
 - GitHub repo: Label-Checkout-Cursor-Work (working prototype, not production IT system yet)
 - Runs today on a label-room PC: double-click `Start Label Verification.bat` → opens in browser at localhost
-- Hardware: Zebra barcode scanner + RFID badge reader (both plug in like keyboards — no special drivers)
+- Hardware: Zebra barcode scanner + RFID badge reader (both plug in like keyboards — no special drivers), (mention 3 tyra printers are what actually print the labels)
 - Badge IDs: 5-digit prox badges supported (e.g. 13925)
 
 ## Required slide order and sections
@@ -40,13 +40,13 @@ You are helping me build a 30-minute presentation slide deck for a non-technical
 4. **What we built (one sentence)** — A scanning station that double-checks every printed label against the log sheet before it leaves the print room
 
 ### Section B — The problem (6–7 min, ~4 slides)
-5. **What happens today (paper FMI B001)** — Operators log labels out on paper; human process, no machine double-check at scan time
+5. **What happens today (paper FMI B001/3)** — Operators log labels out on paper; human process, no machine double-check at scan time
 6. **What can go wrong** — Wrong batch on wrong roll, mismatched label code vs sheet row, no timestamped digital record of who verified what, hard for supervisors to audit after the fact
 7. **Why paper alone isn't enough** — Paper stays (compliance binder); but the floor needs immediate feedback: green = go, red = stop, loud and obvious
 8. **What success looks like** — Every batch verified by a named operator, both physical artifacts scanned, mismatch caught before labels hit the line, exportable record for supervisors
 
 ### Section C — The solution (10–12 min, ~8 slides)
-9. **Core idea: two-scan handshake** — Scan 1 = printed label. Scan 2 = log sheet row. Both must match (batch number AND label code). Nothing auto-filled from memory — both sides come from physical scans.
+9. **Core idea: two-scan handshake** — Scan 1 = printed label. Scan 2 = log sheet row. Both must match (batch number, label code, and item number). Nothing auto-filled from memory — both sides come from physical scans.
 10. **Operator flow (step by step)** — Badge in → Card 1 active (printed label) → Card 2 unlocks (log sheet row) → Green verified OR red mismatch with exact difference shown
 11. **Who is accountable** — RFID badge sign-in, every scan/verify/mismatch logged in Activity
 12. **What the operator sees** — Describe the UI zones without code terms:
@@ -68,17 +68,16 @@ You are helping me build a 30-minute presentation slide deck for a non-technical
 19. **Ask / discussion** — What would supervisors need to trust this on the floor? What would IT need for Phase 2?
 
 ### Section E — Close (2 min, ~1 slide)
-20. **Summary** — Paper process stays; app adds machine enforcement + audit trail; built fast with AI-assisted tools; ready for feedback and pilot
+20. **Summary** — Paper process stays(eventually everything being digital is ideal, just will take a long time); app adds machine enforcement + audit trail; built fast with AI-assisted tools; ready for feedback and pilot
 
 ## Diagrams to include (describe or use mermaid in speaker notes)
 - Two-scan handshake flow: Badge → Label scan → Sheet scan → Match?
 - Paper + digital: FMI B001 binder (official) + app (double-check + log)
-- Today vs tomorrow: Local PC memory → Azure central database
+- Today vs tomorrow: Local PC memory → Azure/fabric central database
 
 ## Things to avoid
-- Don't oversell as "replacing" the paper log — it supplements FMI B001
-- Don't deep-dive into React, TypeScript, IndexedDB, or git — one optional backup slide max if asked
-- Don't claim OCR or D365 live integration exists today
+- Don't oversell as "replacing" the paper log — it supplements FMI B001, this has kinda changed since, we are now good with replacing paper, but it just won't likely happend this summer
+- Don't claim OCR or D365 live integration exists today, we don't know if it does, we at least don't have it
 
 ## Output format
 Deliver:
@@ -87,7 +86,7 @@ Deliver:
 3. 3–5 anticipated Q&A questions with suggested answers (e.g. "What if the PC reboots?" → check-out memory is local to that browser; exports are the backup)
 4. Optional: opening 30-second script and closing 30-second script
 
-Make the deck feel like a production-floor briefing, not a computer science lecture.
+
 ```
 
 ## Suggested screenshots to attach
