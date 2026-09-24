@@ -1,5 +1,7 @@
-import { sideComplete } from '../domain/matching';
+import type { FamilyCheckoutState, FamilyMemberPair } from '../domain/familyCheckout';
+import type { Batch } from '../domain/types';
 import type { SlotNeed, VerificationState } from '../verification/useVerification';
+import { OrderStepsPanel } from './OrderStepsPanel';
 import { ScanSlot, type SlotVisualPhase } from './ScanSlot';
 
 interface VerificationPanelProps {
@@ -7,138 +9,170 @@ interface VerificationPanelProps {
   need: SlotNeed;
   typedBuffer: string;
   onStartOver: () => void;
+  embedded?: boolean;
+  familyCheckout: FamilyCheckoutState | null;
+  parentBatch: Batch | null;
+  orderMembers: Batch[];
+  currentMemberBatch: Batch | null;
+  mismatches: FamilyMemberPair[];
+  operatorName: string | null;
 }
 
-function instruction(need: SlotNeed): { primary: string; sub: string } {
-  if (need.side === 'label' && need.need === 'batch')
+function headline(
+  fam: FamilyCheckoutState | null,
+  current: Batch | null,
+  mismatchCount: number,
+): { title: string; desc: string } {
+  if (!fam) {
     return {
-      primary: 'Scan the batch number on the printed label',
-      sub: 'Use the batch barcode at the bottom of the label',
+      title: 'Select an order to start checkout',
+      desc: 'Click an order in the batch log on the left.',
     };
-  if (need.side === 'label' && need.need === 'code')
+  }
+  if (fam.phase === 'scanning') {
     return {
-      primary: 'Scan the label code (QR)',
-      sub: 'Or type the code and press Enter',
+      title: `Order ${fam.parentBatchNumber}`,
+      desc: current
+        ? `Scan the printed label for ${current.batchNumber}.`
+        : 'Scan the next printed label.',
     };
-  if (need.side === 'sheet' && need.need === 'batch')
+  }
+  if (mismatchCount > 0) {
     return {
-      primary: 'Now scan the matching row on the log sheet',
-      sub: 'Scan the sheet row barcode, or type the batch number from the sheet',
+      title: `Order ${fam.parentBatchNumber} — ${mismatchCount} problem${mismatchCount === 1 ? '' : 's'}`,
+      desc: 'Badge to close it out. The problem labels are flagged, not checked out.',
     };
-  if (need.side === 'sheet' && need.need === 'code')
-    return {
-      primary: 'Confirm the label code on the sheet row',
-      sub: 'Scan the label QR again, or type the code written on the sheet',
-    };
-  return { primary: '', sub: '' };
+  }
+  return {
+    title: `Order ${fam.parentBatchNumber} complete`,
+    desc: 'Every label matched. Badge to check the order out.',
+  };
 }
 
-function labelPhase(
-  labelDone: boolean,
-  need: SlotNeed,
-  verified: boolean,
-): SlotVisualPhase {
-  if (verified && labelDone) return 'complete';
-  if (need.side === 'label') return 'active';
-  if (labelDone) return 'complete';
-  return 'active';
+function labelSlotPhase(fam: FamilyCheckoutState | null): SlotVisualPhase {
+  if (!fam) return 'locked';
+  if (fam.phase === 'scanning') return 'active';
+  return 'complete';
 }
 
-function sheetPhase(
-  labelDone: boolean,
-  sheetDone: boolean,
-  need: SlotNeed,
-  verified: boolean,
-): SlotVisualPhase {
-  if (!labelDone) return 'locked';
-  if (verified && sheetDone) return 'complete';
-  if (need.side === 'sheet') return 'active';
-  if (sheetDone) return 'complete';
-  return 'locked';
+function lockedHint(fam: FamilyCheckoutState | null): string {
+  if (!fam) return 'Pick an order first';
+  return 'Order finished — badge to close it out';
 }
 
-export function VerificationPanel({ state, need, typedBuffer, onStartOver }: VerificationPanelProps) {
-  const verified = !!state.result?.ok;
-  const labelDone = sideComplete(state.label);
-  const sheetDone = sideComplete(state.sheet);
-  const inProgress =
-    !state.result && (!!state.label.batchNumber || !!state.sheet.batchNumber || !!typedBuffer);
+export function VerificationPanel({
+  state,
+  need,
+  typedBuffer,
+  onStartOver,
+  embedded = false,
+  familyCheckout: fam,
+  parentBatch,
+  orderMembers,
+  currentMemberBatch,
+  mismatches,
+  operatorName,
+}: VerificationPanelProps) {
+  const isComplete = fam?.phase === 'complete';
+  const isScanning = fam?.phase === 'scanning';
+  const hasMismatch = mismatches.length > 0;
 
-  const labelVisual = labelPhase(labelDone, need, verified);
-  const sheetVisual = sheetPhase(labelDone, sheetDone, need, verified);
-  const hint = instruction(need);
+  const memberTotal = fam?.memberBatchIds.length ?? 0;
+  const head = headline(fam, currentMemberBatch, mismatches.length);
+  const slotPhase = labelSlotPhase(fam);
 
-  const labelHint =
-    labelVisual === 'active'
-      ? { primary: hint.primary, sub: hint.sub }
-      : { primary: undefined, sub: undefined };
-
-  const sheetHint =
-    sheetVisual === 'active'
-      ? {
-          primary:
-            need.side === 'sheet' && need.need === 'batch' && !state.sheet.batchNumber
-              ? 'Now scan the matching row on the log sheet'
-              : hint.primary,
-          sub: hint.sub,
-        }
-      : { primary: undefined, sub: undefined };
-
-  const showStartOver = inProgress && !verified && !state.notice;
+  const showNextUp =
+    isScanning && !!fam?.lastRecordedBatchNumber && !!currentMemberBatch && !state.notice;
 
   return (
-    <div className="verification zone-panel">
+    <div
+      className={`verification${embedded ? ' verification-embedded' : ' zone-panel main-floor-scan'}${fam ? ` verification-${fam.phase}` : ''}${hasMismatch ? ' verification-has-mismatch' : ''}`}
+    >
       <header className="scan-zone-head">
-        <span className="zone-tag">Scan zone</span>
-        <h2 className="zone-title">Scan two barcodes to verify a label</h2>
-        <p className="zone-desc">
-          Scan the printed label first, then the matching row on the log sheet.
-        </p>
+        <span className="zone-tag">Checkout</span>
+        <h2 className="zone-title">{head.title}</h2>
+        <p className="zone-desc">{head.desc}</p>
       </header>
-      <div className="slots">
+
+      {embedded && (
+        <div className="scan-zone-steps-wrap">
+          <OrderStepsPanel
+            phase={fam?.phase ?? null}
+            parentBatch={parentBatch}
+            orderMembers={orderMembers}
+            currentMemberIndex={fam?.currentMemberIndex ?? 0}
+            completedPairs={fam?.completedPairs ?? []}
+            mismatches={mismatches}
+            operatorName={operatorName}
+          />
+        </div>
+      )}
+
+      <div className="slots slots-single">
         <ScanSlot
           step={1}
           title="PRINTED LABEL"
           subtitle="from the roll"
           side={state.label}
-          activeNeed={need.side === 'label' ? need.need : null}
-          typedBuffer={need.side === 'label' ? typedBuffer : ''}
-          visualPhase={labelVisual}
-          inlinePrimary={labelHint.primary}
-          inlineSub={labelHint.sub}
-        />
-        <div className={`slots-link ${verified ? 'slots-link-ok' : ''}`}>
-          {verified ? '✓' : '→'}
-        </div>
-        <ScanSlot
-          step={2}
-          title="LOG SHEET"
-          subtitle="FMI B001 row"
-          side={state.sheet}
-          activeNeed={need.side === 'sheet' ? need.need : null}
-          typedBuffer={need.side === 'sheet' ? typedBuffer : ''}
-          visualPhase={sheetVisual}
-          inlinePrimary={sheetHint.primary}
-          inlineSub={sheetHint.sub}
-          lockedHint="Step 2 — after label scan"
+          activeNeed={need.side === 'label' && isScanning ? need.need : null}
+          typedBuffer={isScanning ? typedBuffer : ''}
+          visualPhase={slotPhase}
+          inlinePrimary={isScanning ? 'Scan the QR code on the printed label' : undefined}
+          inlineSub={
+            isScanning && currentMemberBatch
+              ? `Expecting ${currentMemberBatch.batchNumber}`
+              : undefined
+          }
+          lockedHint={lockedHint(fam)}
+          hideStepBadge={embedded}
         />
       </div>
 
-      {verified ? (
-        <div className="verdict verdict-ok">
-          <span className="verdict-icon">✓</span>
-          VERIFIED — {state.verifiedBatchNumber}
-          <span className="verdict-sub">ready for next batch…</span>
-        </div>
+      {isComplete ? (
+        <>
+          <div className={`verdict ${hasMismatch ? 'verdict-warn' : 'verdict-ok'}`}>
+            <span className="verdict-icon">{hasMismatch ? '!' : '✓'}</span>
+            {hasMismatch
+              ? `${mismatches.length} OF ${memberTotal} DID NOT MATCH`
+              : `ORDER COMPLETE — ${state.verifiedBatchNumber}`}
+            <span className="verdict-sub">
+              {state.notice ??
+                (hasMismatch
+                  ? 'Matched labels will be checked out. Problem labels go to a supervisor.'
+                  : `All ${memberTotal} label${memberTotal === 1 ? '' : 's'} matched`)}
+            </span>
+          </div>
+          <div className={`badge-prompt ${hasMismatch ? 'badge-prompt-bad' : 'badge-prompt-good'}`}>
+            <span className="badge-prompt-icon" aria-hidden>
+              🪪
+            </span>
+            <span className="badge-prompt-text">
+              <strong>
+                {operatorName
+                  ? `${operatorName} — tap your badge to finish.`
+                  : 'Tap your badge to finish.'}
+              </strong>
+              <span className="badge-prompt-sub">
+                Nothing is recorded until you do, and the badge must match who is signed in.
+              </span>
+            </span>
+          </div>
+        </>
       ) : state.notice ? (
         <div className="verdict verdict-waiting verdict-notice">{state.notice}</div>
-      ) : showStartOver ? (
-        <div className="verdict verdict-actions">
-          <button className="btn btn-ghost verdict-reset" onClick={onStartOver}>
-            Start over
-          </button>
+      ) : showNextUp ? (
+        <div className="verdict verdict-waiting verdict-nextup">
+          Recorded {fam?.lastRecordedBatchNumber} — next {currentMemberBatch?.batchNumber}
         </div>
       ) : null}
+
+      {fam && (
+        <div className="verdict verdict-actions">
+          <button className="btn btn-ghost verdict-reset" onClick={onStartOver}>
+            {isComplete ? 'Start over' : 'Cancel order'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

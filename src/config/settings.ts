@@ -7,7 +7,26 @@ export interface AppSettings {
   commitPauseMs: number;
   /** How long the green VERIFIED verdict stays up before auto-advancing. */
   autoAdvanceMs: number;
+  /** Idle time before auto sign-out while signed in (ms). Admin-adjustable. */
+  sessionTimeoutMs: number;
   soundEnabled: boolean;
+}
+
+/** Slider range for session timeout (minutes). */
+export const SESSION_TIMEOUT_MIN_MINUTES = 1;
+export const SESSION_TIMEOUT_MAX_MINUTES = 60;
+export const SESSION_TIMEOUT_DEFAULT_MINUTES = 20;
+
+export function sessionTimeoutToMinutes(ms: number): number {
+  return Math.round(ms / 60_000);
+}
+
+export function minutesToSessionTimeout(minutes: number): number {
+  const clamped = Math.min(
+    SESSION_TIMEOUT_MAX_MINUTES,
+    Math.max(SESSION_TIMEOUT_MIN_MINUTES, minutes),
+  );
+  return clamped * 60_000;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -16,21 +35,20 @@ export const DEFAULT_SETTINGS: AppSettings = {
   burstGapMs: 40,
   commitPauseMs: 250,
   autoAdvanceMs: 2500,
+  sessionTimeoutMs: minutesToSessionTimeout(SESSION_TIMEOUT_DEFAULT_MINUTES),
   soundEnabled: true,
 };
 
-const STORAGE_KEY = 'lvs-settings';
+export const SETTINGS_STORAGE_KEY = 'lvs-settings';
 
-export function loadSettings(): AppSettings {
+export function parseSettings(raw: string | null | undefined): AppSettings {
+  if (!raw) return DEFAULT_SETTINGS;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_SETTINGS;
     const saved = JSON.parse(raw) as Partial<AppSettings>;
     const merged = { ...DEFAULT_SETTINGS, ...saved };
     // Upgrade legacy default that rejected 5-digit prox badges.
     if (merged.badgePattern === '^\\d{6,10}$') {
       merged.badgePattern = DEFAULT_SETTINGS.badgePattern;
-      saveSettings(merged);
     }
     return merged;
   } catch {
@@ -38,6 +56,14 @@ export function loadSettings(): AppSettings {
   }
 }
 
+export function loadSettings(): AppSettings {
+  try {
+    return parseSettings(localStorage.getItem(SETTINGS_STORAGE_KEY));
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
 export function saveSettings(settings: AppSettings): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
 }

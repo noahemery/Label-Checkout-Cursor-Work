@@ -1,4 +1,4 @@
-import type { AuditEvent, Batch, Operator } from '../domain/types';
+import type { AuditEvent, Batch, ImportSession, Operator, UserRole } from '../domain/types';
 
 /**
  * Repository abstraction for all persistence.
@@ -23,11 +23,22 @@ export interface BatchInput {
   labelCode?: string | null;
   upc?: string | null;
   quantity?: number | null;
+  /** Per-run size from D365 Split; null = one run for full quantity. */
+  splitQty?: number | null;
+  /** Full order quantity (before per-run split). */
+  orderTotalQty?: number | null;
   dom?: string | null;
   doe?: string | null;
+  deliveryDate?: string | null;
   source?: Batch['source'];
   /** Required for addBatch; importBatches sets this from the page id. */
   sheetPageId?: string;
+  /** Set by importBatches when rows come from a CSV import session. */
+  importId?: string | null;
+}
+
+export interface ImportMeta {
+  filename: string;
 }
 
 export type AuditInput = Omit<AuditEvent, 'id' | 'ts'>;
@@ -35,6 +46,7 @@ export type AuditInput = Omit<AuditEvent, 'id' | 'ts'>;
 export interface ImportResult {
   added: number;
   skipped: number;
+  importId: string;
 }
 
 export interface DataStore {
@@ -42,29 +54,29 @@ export interface DataStore {
   getBatches(): Promise<Batch[]>;
   getBatchesForPage(pageId: string): Promise<Batch[]>;
   findBatchOnPage(pageId: string, batchNumber: string): Promise<Batch | undefined>;
-  findBatchByNumber(batchNumber: string): Promise<Batch | undefined>;
   addBatch(input: BatchInput): Promise<Batch>;
-  importBatches(pageId: string, inputs: BatchInput[]): Promise<ImportResult>;
+  importBatches(pageId: string, inputs: BatchInput[], meta?: ImportMeta): Promise<ImportResult>;
+  getImportSessions(): Promise<ImportSession[]>;
+  getImportSessionsForPage(pageId: string): Promise<ImportSession[]>;
   verifyRow(batchId: string, operator: Operator): Promise<Batch>;
   reopenRow(batchId: string): Promise<Batch>;
   flagRow(batchId: string): Promise<Batch>;
   deleteBatch(batchId: string): Promise<void>;
-  /** Wipe all batches + uploaded photo for one log sheet page. */
+  /** Wipe every batch in one print run. */
   deletePageData(pageId: string): Promise<void>;
-  assignOrphanBatches(pageId: string, batchNumberNorms: string[]): Promise<number>;
-
-  // Log sheet page photos (uploaded physical FMI B001 pages)
-  getSheetPhoto(pageId: string): Promise<string | null>;
-  saveSheetPhoto(pageId: string, dataUrl: string): Promise<void>;
-  deleteSheetPhoto(pageId: string): Promise<void>;
 
   // Operators
   getOperators(): Promise<Operator[]>;
   getOperatorByBadge(badgeId: string): Promise<Operator | undefined>;
-  enrollOperator(badgeId: string, name: string): Promise<Operator>;
+  enrollOperator(badgeId: string, name: string, role?: UserRole): Promise<Operator>;
+  updateUserRole(operatorId: string, role: UserRole): Promise<Operator>;
   removeOperator(operatorId: string): Promise<void>;
 
   // Audit trail (scan events, verifications, mismatches, re-opens, sessions)
   saveScanEvent(input: AuditInput): Promise<AuditEvent>;
   getAuditEvents(limit?: number): Promise<AuditEvent[]>;
+
+  // Station configuration (SQLite settings table on desktop, localStorage in browser)
+  getSetting(key: string): Promise<string | null>;
+  setSetting(key: string, value: string): Promise<void>;
 }

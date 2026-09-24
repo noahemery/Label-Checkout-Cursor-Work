@@ -6,15 +6,16 @@ import { ActivityDrawer } from './components/ActivityDrawer';
 import { AdminModal } from './components/AdminModal';
 import { BadgeGate } from './components/BadgeGate';
 import { BatchQueue } from './components/BatchQueue';
-import { MismatchOverlay } from './components/MismatchOverlay';
 import { RecheckOverlay } from './components/RecheckOverlay';
 import { SheetCompleteOverlay } from './components/SheetCompleteOverlay';
+import { TestLabelsDrawer } from './components/TestLabelsDrawer';
 import { TopBar } from './components/TopBar';
 import { VerificationPanel } from './components/VerificationPanel';
 import { useSettings } from './config/SettingsContext';
 import { useSheetPage } from './data/SheetPageContext';
 import { cleanPayload } from './domain/normalize';
 import { parsePayload } from './domain/payloads';
+import type { BatchFamilyGroup } from './domain/batchFamily';
 import { findBatchByValue, looksLikeGtin, matchesProductCode } from './domain/resolve';
 import { useSession } from './session/SessionContext';
 import { useVerification } from './verification/useVerification';
@@ -23,13 +24,29 @@ export default function App() {
   const { settings } = useSettings();
   const { activePage, pageBatches } = useSheetPage();
   const session = useSession();
-  const verification = useVerification(session.operator, pageBatches);
+  const verification = useVerification(session.operator, pageBatches, {
+    badgeProven: session.signInMethod === 'badge',
+    onBadgeProven: session.markBadgeProven,
+  });
 
   const [adminOpen, setAdminOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [testLabelsOpen, setTestLabelsOpen] = useState(false);
   const [gateNotice, setGateNotice] = useState<string | null>(null);
   const [sheetCompleteOpen, setSheetCompleteOpen] = useState(false);
   const prevVerifiedRef = useRef(-1);
+
+  // The batch log follows the checkout session: the member being scanned while
+  // the order is open, otherwise the order's parent row.
+  const highlightBatchId =
+    verification.currentMemberBatch?.id ?? verification.familyCheckout?.parentBatchId ?? null;
+
+  const handleSelectFamily = useCallback(
+    (family: BatchFamilyGroup) => {
+      verification.startFamilyCheckout(family);
+    },
+    [verification],
+  );
 
   useEffect(() => {
     const total = pageBatches.length;
@@ -47,19 +64,40 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset scan state when sheet page changes
   }, [activePage.id]);
 
+  // Entering the operator preview must also drop admin chrome that is already
+  // open, or the preview is not what an operator would actually see.
+  useEffect(() => {
+    if (session.viewAsOperator) {
+      setActivityOpen(false);
+      setAdminOpen(false);
+      setTestLabelsOpen(false);
+    }
+  }, [session.viewAsOperator]);
+
+  const openTestLabels = useCallback(() => {
+    setTestLabelsOpen(true);
+    setAdminOpen(false);
+    setActivityOpen(false);
+  }, []);
+
   const handleCommit = useCallback(
     async ({ text, isScanner }: CaptureCommit) => {
+      session.touchSession();
       const parsed = parsePayload(text, settings.badgePattern);
 
       if (parsed.kind === 'badge') {
         setGateNotice(null);
+
+        // A held order owns the badge: it signs the order off rather than
+        // signing the operator out.
+        if (verification.awaitingBadge) {
+          const outcome = await verification.confirmOrderWithBadge(parsed.badgeId);
+          if (outcome !== 'not_waiting') return;
+        }
+
         const result = await session.handleBadge(parsed.badgeId);
         if (result !== 'unknown') return;
 
-        // Not an enrolled badge. Numeric codes on real labels (product UPC,
-        // item-only QR, all-digit batch numbers) can look badge-shaped, so
-        // re-route to verification when the value resolves to something we
-        // know — only a true stranger is reported as an unknown badge.
         const value = cleanPayload(parsed.raw);
         const isLabelData =
           !!findBatchByValue(value, pageBatches) ||
@@ -90,8 +128,6 @@ export default function App() {
     [settings.badgePattern, settings.soundEnabled, session, verification, pageBatches],
   );
 
-  // Global wedge capture is suspended while Admin is open so its form
-  // fields (badge enrollment, batch entry) receive keystrokes directly.
   const capture = useWedgeCapture({
     enabled: !adminOpen && !verification.recheckPrompt && !sheetCompleteOpen,
     burstGapMs: settings.burstGapMs,
@@ -113,10 +149,12 @@ export default function App() {
     });
   }, []);
 
-  const mismatch = verification.state.result && !verification.state.result.ok;
+  const profileClass = session.isAdmin ? 'app-profile-admin' : session.operator ? 'app-profile-operator' : '';
 
   return (
-    <div className={`app${!session.operator && !adminOpen ? ' app-gated' : ''}`}>
+    <div
+      className={`app${!session.operator && !adminOpen ? ' app-gated' : ''}${profileClass ? ` ${profileClass}` : ''}`}
+    >
       <input
         ref={capture.inputRef}
         onKeyDown={capture.onKeyDown}
@@ -132,14 +170,30 @@ export default function App() {
         adminOpen={adminOpen}
       />
 
-      <main className="main">
-        <VerificationPanel
-          state={verification.state}
-          need={verification.need}
-          typedBuffer={capture.buffer}
-          onStartOver={verification.reset}
+      <main className="main main-floor">
+        <BatchQueue
+          selectedBatchId={highlightBatchId}
+          activeFamilyParentId={verification.familyCheckout?.parentBatchId ?? null}
+          activeMemberBatchId={verification.currentMemberBatch?.id ?? null}
+          orderPhase={verification.familyCheckout?.phase ?? null}
+          onSelectFamily={handleSelectFamily}
+          onOpenTestLabels={session.isAdmin ? openTestLabels : undefined}
         />
-        <BatchQueue />
+        <aside className="checkout-rail zone-panel" aria-label="Order checkout">
+          <VerificationPanel
+            embedded
+            familyCheckout={verification.familyCheckout}
+            parentBatch={verification.parentBatch}
+            orderMembers={verification.orderMembers}
+            currentMemberBatch={verification.currentMemberBatch}
+            state={verification.state}
+            need={verification.need}
+            mismatches={verification.orderMismatches}
+            operatorName={session.operator?.name ?? null}
+            typedBuffer={capture.buffer}
+            onStartOver={verification.reset}
+          />
+        </aside>
       </main>
 
       {!session.operator && !adminOpen && (
@@ -154,14 +208,6 @@ export default function App() {
         />
       )}
 
-      {mismatch && verification.state.result && (
-        <MismatchOverlay
-          result={verification.state.result}
-          onRescan={verification.reset}
-          onFlag={() => void verification.flagMismatch()}
-        />
-      )}
-
       {sheetCompleteOpen && pageBatches.length > 0 && (
         <SheetCompleteOverlay
           referenceNumber={activePage.referenceNumber}
@@ -170,8 +216,16 @@ export default function App() {
         />
       )}
 
-      <ActivityDrawer open={activityOpen} onClose={() => setActivityOpen(false)} />
-      <AdminModal open={adminOpen} onClose={() => setAdminOpen(false)} />
+      <ActivityDrawer open={activityOpen && session.isAdmin} onClose={() => setActivityOpen(false)} />
+      <TestLabelsDrawer
+        open={testLabelsOpen && session.isRealAdmin && !session.viewAsOperator}
+        onClose={() => setTestLabelsOpen(false)}
+      />
+      <AdminModal
+        open={adminOpen}
+        onClose={() => setAdminOpen(false)}
+        onOpenTestLabels={session.isAdmin ? openTestLabels : undefined}
+      />
     </div>
   );
 }

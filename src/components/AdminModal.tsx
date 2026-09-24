@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useSettings } from '../config/SettingsContext';
+import {
+  minutesToSessionTimeout,
+  SESSION_TIMEOUT_MAX_MINUTES,
+  SESSION_TIMEOUT_MIN_MINUTES,
+  sessionTimeoutToMinutes,
+} from '../config/settings';
 import { useAppData } from '../data/AppDataContext';
-import { parseCsvFile } from '../data/csv';
 import { useSheetPage } from '../data/SheetPageContext';
 import { useSession } from '../session/SessionContext';
 
@@ -16,11 +21,12 @@ import { useSession } from '../session/SessionContext';
 interface AdminModalProps {
   open: boolean;
   onClose: () => void;
+  onOpenTestLabels?: () => void;
 }
 
 type Tab = 'batches' | 'operators' | 'settings';
 
-export function AdminModal({ open, onClose }: AdminModalProps) {
+export function AdminModal({ open, onClose, onOpenTestLabels }: AdminModalProps) {
   const [tab, setTab] = useState<Tab>('batches');
   const { unknownBadge } = useSession();
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -57,7 +63,7 @@ export function AdminModal({ open, onClose }: AdminModalProps) {
               className={tab === 'operators' ? 'tab tab-active' : 'tab'}
               onClick={() => setTab('operators')}
             >
-              Operators
+              People
             </button>
             <button
               className={tab === 'settings' ? 'tab tab-active' : 'tab'}
@@ -68,8 +74,8 @@ export function AdminModal({ open, onClose }: AdminModalProps) {
           </nav>
         </div>
         <div className="modal-body modal-body-admin" ref={bodyRef}>
-          {tab === 'batches' && <BatchesTab />}
-          {tab === 'operators' && <OperatorsTab />}
+          {tab === 'batches' && <BatchesTab onOpenTestLabels={onOpenTestLabels} />}
+          {tab === 'operators' && <PeopleTab />}
           {tab === 'settings' && <SettingsTab />}
         </div>
       </div>
@@ -79,7 +85,7 @@ export function AdminModal({ open, onClose }: AdminModalProps) {
 
 // ---- Batches ---------------------------------------------------------
 
-function BatchesTab() {
+function BatchesTab({ onOpenTestLabels }: { onOpenTestLabels?: () => void }) {
   const { store, refreshBatches, logAudit } = useAppData();
   const { activePage, activePageId, pageBatches } = useSheetPage();
   const { operator } = useSession();
@@ -135,25 +141,6 @@ function BatchesTab() {
     setMessage(`Added batch ${batch.batchNumber}.`);
   };
 
-  const importCsv = async (file: File) => {
-    setMessage('Importing…');
-    const { rows, errors } = await parseCsvFile(file);
-    if (rows.length === 0) {
-      setMessage(errors[0] ?? 'No usable rows found in that file.');
-      return;
-    }
-    const result = await store.importBatches(activePageId, rows);
-    await refreshBatches();
-    await logAudit({
-      type: 'csv_import',
-      operatorId: operator?.id ?? null,
-      operatorName: operator?.name ?? null,
-      batchNumber: null,
-      detail: `CSV import "${file.name}": ${result.added} added, ${result.skipped} skipped (duplicates/blank)`,
-    });
-    setMessage(`Imported ${result.added} batches (${result.skipped} skipped).`);
-  };
-
   const deleteBatch = async () => {
     if (!pendingDelete) return;
     const { id, batchNumber } = pendingDelete;
@@ -168,7 +155,7 @@ function BatchesTab() {
     });
     setPendingDelete(null);
     setConfirmText('');
-    setMessage(`Removed batch ${batchNumber}. Use D365 import or Reset sheet to restore catalog rows.`);
+    setMessage(`Removed batch ${batchNumber}. Re-import the D365 export to restore it.`);
   };
 
   const startDelete = (id: string, batchNumber: string) => {
@@ -252,20 +239,19 @@ function BatchesTab() {
         </button>
       </form>
 
-      <h3>Import the day&rsquo;s print run (CSV)</h3>
       <p className="admin-hint">
-        Columns are matched loosely — it needs at least a batch column; item, product, label code,
-        qty, DOM and DOE are picked up when present.
+        To load batches, use <strong>Load sample export</strong> or <strong>Choose your file</strong>{' '}
+        in the D365 panel on the batch log — that walks through column mapping and preview before
+        import.
+        {pageBatches.length > 0 && onOpenTestLabels && (
+          <>
+            {' '}
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onOpenTestLabels}>
+              Test labels
+            </button>
+          </>
+        )}
       </p>
-      <input
-        type="file"
-        accept=".csv,text/csv"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) void importCsv(file);
-          e.target.value = '';
-        }}
-      />
 
       {message && <div className="admin-message">{message}</div>}
 
@@ -302,8 +288,8 @@ function BatchesTab() {
         Batches on {activePage.referenceNumber} ({pageBatches.length})
       </h3>
       <p className="admin-hint">
-        Only batches on the active log sheet are listed. To wipe an entire sheet, use{' '}
-        <strong>Reset sheet…</strong> on the main screen.
+        Only batches in the current print run are listed. To wipe the whole run, use{' '}
+        <strong>Clear run</strong> in the import panel.
       </p>
       <div className="admin-list">
         {pageBatches.map((b) => (
@@ -330,38 +316,41 @@ function BatchesTab() {
   );
 }
 
-// ---- Operators -------------------------------------------------------
+// ---- People (admins + operators) -------------------------------------
 
-function OperatorsTab() {
+function PeopleTab() {
   const { store, operators, refreshOperators, logAudit } = useAppData();
   const { operator, unknownBadge, clearUnknownBadge } = useSession();
   const [name, setName] = useState('');
   const [badgeId, setBadgeId] = useState(unknownBadge ?? '');
+  const [enrollRole, setEnrollRole] = useState<'admin' | 'operator'>('operator');
   const [message, setMessage] = useState<string | null>(null);
+  const [pendingRemove, setPendingRemove] = useState<{ id: string; name: string } | null>(null);
+
+  const admins = operators.filter((op) => (op.role ?? 'operator') === 'admin');
+  const floorOps = operators.filter((op) => (op.role ?? 'operator') === 'operator');
 
   const enroll = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !badgeId.trim()) return;
     try {
-      const op = await store.enrollOperator(badgeId, name);
+      const op = await store.enrollOperator(badgeId, name, enrollRole);
       await refreshOperators();
       await logAudit({
         type: 'enroll',
         operatorId: operator?.id ?? null,
         operatorName: operator?.name ?? null,
         batchNumber: null,
-        detail: `Badge enrolled for ${op.name}`,
+        detail: `Enrolled ${op.name} as ${enrollRole}`,
       });
       setName('');
       setBadgeId('');
       clearUnknownBadge();
-      setMessage(`Enrolled ${op.name}. They can badge in now.`);
+      setMessage(`Enrolled ${op.name} as ${enrollRole}. They can badge in now.`);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Enrollment failed.');
     }
   };
-
-  const [pendingRemove, setPendingRemove] = useState<{ id: string; name: string } | null>(null);
 
   const remove = async () => {
     if (!pendingRemove) return;
@@ -372,21 +361,70 @@ function OperatorsTab() {
       operatorId: operator?.id ?? null,
       operatorName: operator?.name ?? null,
       batchNumber: null,
-      detail: `Operator removed: ${pendingRemove.name}`,
+      detail: `User removed: ${pendingRemove.name}`,
     });
     setPendingRemove(null);
     setMessage(`Removed ${pendingRemove.name}.`);
   };
 
+  const toggleRole = async (userId: string, name: string, current: 'admin' | 'operator') => {
+    const next = current === 'admin' ? 'operator' : 'admin';
+    try {
+      await store.updateUserRole(userId, next);
+      await refreshOperators();
+      setMessage(`${name} is now ${next === 'admin' ? 'an admin' : 'an operator'}.`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Could not change role.');
+    }
+  };
+
+  const renderList = (
+    list: typeof operators,
+    emptyLabel: string,
+    roleLabel: 'admin' | 'operator',
+  ) => (
+    <div className="admin-list">
+      {list.length === 0 ? (
+        <p className="admin-hint">{emptyLabel}</p>
+      ) : (
+        list.map((op) => (
+          <div key={op.id} className="admin-list-row">
+            <span className={`role-pill role-pill-${roleLabel}`}>{roleLabel}</span>
+            <span className="admin-list-main">{op.name}</span>
+            <span className="admin-list-dim">badge {op.badgeIdNorm}</span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={!!pendingRemove}
+              onClick={() => void toggleRole(op.id, op.name, roleLabel)}
+            >
+              Make {roleLabel === 'admin' ? 'operator' : 'admin'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm admin-remove-btn"
+              disabled={!!pendingRemove}
+              onClick={() => setPendingRemove({ id: op.id, name: op.name })}
+            >
+              Remove…
+            </button>
+          </div>
+        ))
+      )}
+    </div>
+  );
+
   return (
     <div className="admin-section">
       <h3>Enroll a badge</h3>
       <p className="admin-hint">
-        Click into the badge field, then tap the badge on the reader — it will type the ID for you.
+        Click into the badge field, then tap the badge on the reader. Choose whether this person
+        gets the <strong>admin</strong> profile (full tools) or <strong>operator</strong> profile
+        (checkout only).
       </p>
       <form className="admin-form" onSubmit={(e) => void enroll(e)}>
         <label>
-          Operator name *
+          Name *
           <input value={name} onChange={(e) => setName(e.target.value)} required />
         </label>
         <label>
@@ -398,6 +436,27 @@ function OperatorsTab() {
             required
           />
         </label>
+        <fieldset className="admin-role-pick">
+          <legend>Profile at badge-in</legend>
+          <label className="admin-check">
+            <input
+              type="radio"
+              name="enrollRole"
+              checked={enrollRole === 'operator'}
+              onChange={() => setEnrollRole('operator')}
+            />
+            Operator — minimal checkout screen
+          </label>
+          <label className="admin-check">
+            <input
+              type="radio"
+              name="enrollRole"
+              checked={enrollRole === 'admin'}
+              onChange={() => setEnrollRole('admin')}
+            />
+            Admin — full tools + data
+          </label>
+        </fieldset>
         <button className="btn btn-primary" type="submit">
           Enroll
         </button>
@@ -405,38 +464,29 @@ function OperatorsTab() {
 
       {message && <div className="admin-message">{message}</div>}
 
-      <h3>Enrolled operators ({operators.length})</h3>
       {pendingRemove && (
         <div className="admin-delete-confirm">
           <p className="admin-delete-warn">
-            Remove operator <strong>{pendingRemove.name}</strong>?
+            Remove <strong>{pendingRemove.name}</strong>? They will no longer be able to badge in.
           </p>
           <div className="admin-delete-actions">
             <button type="button" className="btn btn-ghost" onClick={() => setPendingRemove(null)}>
               Cancel
             </button>
             <button type="button" className="btn btn-danger btn-sm" onClick={() => void remove()}>
-              Remove operator
+              Remove
             </button>
           </div>
         </div>
       )}
-      <div className="admin-list">
-        {operators.map((op) => (
-          <div key={op.id} className="admin-list-row">
-            <span className="admin-list-main">{op.name}</span>
-            <span className="admin-list-dim">badge {op.badgeIdNorm}</span>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm admin-remove-btn"
-              disabled={!!pendingRemove}
-              onClick={() => setPendingRemove({ id: op.id, name: op.name })}
-            >
-              Remove…
-            </button>
-          </div>
-        ))}
-      </div>
+
+      <h3>Admins ({admins.length})</h3>
+      <p className="admin-hint">Badge in opens the admin profile with CSV upload, activity, and settings.</p>
+      {renderList(admins, 'No admins enrolled yet.', 'admin')}
+
+      <h3>Operators ({floorOps.length})</h3>
+      <p className="admin-hint">Badge in opens the minimal checkout screen only.</p>
+      {renderList(floorOps, 'No operators enrolled yet.', 'operator')}
     </div>
   );
 }
@@ -445,9 +495,55 @@ function OperatorsTab() {
 
 function SettingsTab() {
   const { settings, updateSettings } = useSettings();
+  const { storeKind } = useAppData();
+  const timeoutMinutes = sessionTimeoutToMinutes(settings.sessionTimeoutMs);
 
   return (
     <div className="admin-section">
+      <h3>This station</h3>
+      <p className="admin-hint">
+        {storeKind === 'sqlite' ? (
+          <>
+            Running on SQLite. The database file is{' '}
+            <code>label-verification.db</code> under{' '}
+            <code>%APPDATA%\com.alltech.labelverification</code>. Copy that file to
+            back up this station.
+          </>
+        ) : (
+          <>
+            Running in a browser on IndexedDB. Floor testing needs the desktop app
+            so checkout data is a file you can copy.
+          </>
+        )}
+      </p>
+
+      <h3>Session</h3>
+      <div className="admin-form">
+        <label className="admin-slider-label">
+          Idle sign-out timeout
+          <div className="admin-slider-row">
+            <input
+              type="range"
+              className="admin-slider"
+              min={SESSION_TIMEOUT_MIN_MINUTES}
+              max={SESSION_TIMEOUT_MAX_MINUTES}
+              step={1}
+              value={timeoutMinutes}
+              onChange={(e) =>
+                updateSettings({
+                  sessionTimeoutMs: minutesToSessionTimeout(Number(e.target.value)),
+                })
+              }
+            />
+            <span className="admin-slider-value">{timeoutMinutes} min</span>
+          </div>
+          <span className="admin-hint">
+            Signed-in users are auto-signed out after this long with no scans or screen
+            interaction. Adjust while watching floor timing — start generous (e.g. 20 min).
+          </span>
+        </label>
+      </div>
+
       <h3>Capture &amp; behavior</h3>
       <div className="admin-form">
         <label>

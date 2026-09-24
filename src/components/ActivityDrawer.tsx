@@ -11,8 +11,10 @@ interface ActivityDrawerProps {
 
 const TYPE_META: Record<AuditType, { label: string; tone: string }> = {
   scan: { label: 'Scan', tone: 'neutral' },
+  order_open: { label: 'Order opened', tone: 'neutral' },
   verify: { label: 'Verified', tone: 'good' },
   mismatch: { label: 'Mismatch', tone: 'bad' },
+  badge_attribution: { label: 'Badge attribution', tone: 'warn' },
   reopen: { label: 'Re-opened', tone: 'warn' },
   flag: { label: 'Flagged', tone: 'bad' },
   sign_in: { label: 'Sign in', tone: 'neutral' },
@@ -22,16 +24,40 @@ const TYPE_META: Record<AuditType, { label: string; tone: string }> = {
   batch_add: { label: 'Batch added', tone: 'neutral' },
   batch_delete: { label: 'Batch deleted', tone: 'warn' },
   csv_import: { label: 'CSV import', tone: 'neutral' },
-  page_select: { label: 'Page selected', tone: 'neutral' },
-  sheet_photo: { label: 'Sheet photo', tone: 'neutral' },
-  sheet_reset: { label: 'Sheet reset', tone: 'warn' },
+  page_select: { label: 'Print run selected', tone: 'neutral' },
+  // Retained so historical events from the paper-sheet era still render.
+  sheet_photo: { label: 'Sheet photo (legacy)', tone: 'neutral' },
+  sheet_reset: { label: 'Run cleared', tone: 'warn' },
 };
+
+/** Older databases can hold audit types this build no longer defines. */
+const UNKNOWN_META = { label: 'Event', tone: 'neutral' };
+
+type FilterId = 'all' | 'sessions' | 'checkouts';
+
+const FILTERS: { id: FilterId; label: string; types: AuditType[] | null }[] = [
+  { id: 'all', label: 'All', types: null },
+  {
+    id: 'sessions',
+    label: 'Sessions',
+    types: ['sign_in', 'sign_out', 'enroll', 'operator_removed'],
+  },
+  {
+    id: 'checkouts',
+    label: 'Checkouts',
+    types: ['order_open', 'verify', 'mismatch', 'badge_attribution', 'flag', 'reopen'],
+  },
+];
 
 export function ActivityDrawer({ open, onClose }: ActivityDrawerProps) {
   const { audit, store, batches } = useAppData();
   const { activePage } = useSheetPage();
   const [exportMsg, setExportMsg] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FilterId>('all');
   if (!open) return null;
+
+  const activeTypes = FILTERS.find((f) => f.id === filter)?.types ?? null;
+  const visible = activeTypes ? audit.filter((e) => activeTypes.includes(e.type)) : audit;
 
   const showExportMsg = (msg: string) => {
     setExportMsg(msg);
@@ -76,10 +102,26 @@ export function ActivityDrawer({ open, onClose }: ActivityDrawerProps) {
           </div>
         </div>
         {exportMsg && <div className="drawer-export-msg">{exportMsg}</div>}
+        <div className="drawer-filters" role="group" aria-label="Filter activity">
+          {FILTERS.map((f) => (
+            <button
+              key={f.id}
+              className={`btn btn-ghost btn-sm${filter === f.id ? ' btn-active' : ''}`}
+              aria-pressed={filter === f.id}
+              onClick={() => setFilter(f.id)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
         <div className="drawer-body">
-          {audit.length === 0 && <div className="drawer-empty">No activity yet.</div>}
-          {audit.map((e) => {
-            const meta = TYPE_META[e.type];
+          {visible.length === 0 && (
+            <div className="drawer-empty">
+              {audit.length === 0 ? 'No activity yet.' : 'No events of this kind yet.'}
+            </div>
+          )}
+          {visible.map((e) => {
+            const meta = TYPE_META[e.type] ?? UNKNOWN_META;
             return (
               <div key={e.id} className={`audit-row audit-${meta.tone}`}>
                 <div className="audit-top">

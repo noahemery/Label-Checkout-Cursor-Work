@@ -1,15 +1,16 @@
-import { normalizeId } from './normalize';
+import type { Batch, BatchStatus } from './types';
 
 /**
- * Batch order families on the log sheet.
+ * Batch order families within a print run.
  *
- *   Parent (P):  BO122232       — no dash suffix, # of entries = "P" or "1"
- *   Split:       BO122232-02    — always has -NN when more than one roll
+ *   Parent:  BO636845       — no dash suffix; the first (or only) production run
+ *   Split:   BO636845-02    — one child per additional run, from the D365 Split column
  *
- * Matching is always by the full scanned batch number against a row on the sheet.
+ * Matching is always by the full batch number, never by the base.
  */
 
 const SPLIT_SUFFIX = /-(\d{2})$/;
+const ANY_TRAILING_RUN_SUFFIX = /-(\d+)$/;
 
 export function batchBaseNumber(batchNumber: string): string {
   return batchNumber.replace(SPLIT_SUFFIX, '');
@@ -24,53 +25,63 @@ export function isParentBatch(batchNumber: string): boolean {
   return splitSuffix(batchNumber) === null;
 }
 
-/** Parse # OF ENTRIES like "P, 2-3" or "P, 2, 3, 4" into split suffixes 02, 03… */
-export function parseEntrySuffixes(entries: string | null): string[] {
-  if (!entries) return [];
-  const rest = entries.replace(/^P\s*,?\s*/i, '').trim();
-  if (!rest) return [];
+/**
+ * Ends in -digits, but not the canonical two-digit run suffix. Such a batch is
+ * not recognised as a child at all, so it would silently import as its own order.
+ */
+export function hasMalformedRunSuffix(batchNumber: string): boolean {
+  const m = batchNumber.match(ANY_TRAILING_RUN_SUFFIX);
+  return m !== null && m[1].length !== 2;
+}
 
-  const suffixes: string[] = [];
-  for (const part of rest.split(',').map((s) => s.trim()).filter(Boolean)) {
-    if (/^\d+\s*-\s*\d+$/.test(part)) {
-      const [a, b] = part.split('-').map((n) => Number(n.trim()));
-      for (let i = a; i <= b; i++) suffixes.push(String(i).padStart(2, '0'));
-    } else {
-      const n = Number(part);
-      if (!Number.isNaN(n)) suffixes.push(String(n).padStart(2, '0'));
-    }
+export interface BatchFamilyGroup {
+  /** Parent batch (no -NN suffix) or the only batch in a standalone order. */
+  parent: Batch;
+  /** Child batches (-02, -03, …), sorted by suffix. */
+  children: Batch[];
+  /** All members including parent, in run order. */
+  members: Batch[];
+}
+
+const STATUS_RANK: Record<BatchStatus, number> = {
+  flagged: 0,
+  pending: 1,
+  verified: 2,
+};
+
+/** Worst status in a family drives sort order (flagged first). */
+export function familyStatusRank(members: Batch[]): number {
+  return Math.min(...members.map((m) => STATUS_RANK[m.status]));
+}
+
+function familySortRank(members: Batch[]): number {
+  return familyStatusRank(members);
+}
+
+export function groupBatchesIntoFamilies(batches: Batch[]): BatchFamilyGroup[] {
+  const byBase = new Map<string, Batch[]>();
+  for (const b of batches) {
+    const base = batchBaseNumber(b.batchNumber);
+    const list = byBase.get(base) ?? [];
+    list.push(b);
+    byBase.set(base, list);
   }
-  return suffixes;
-}
 
-export function familyBatchNumbers(baseBatch: string, entries: string | null): string[] {
-  const base = baseBatch.trim();
-  const numbers = [base];
-  for (const suffix of parseEntrySuffixes(entries)) {
-    numbers.push(`${base}-${suffix}`);
+  const groups: BatchFamilyGroup[] = [];
+  for (const members of byBase.values()) {
+    members.sort((a, b) => {
+      const sa = splitSuffix(a.batchNumber) ?? '00';
+      const sb = splitSuffix(b.batchNumber) ?? '00';
+      return sa.localeCompare(sb);
+    });
+    const parent = members.find((m) => splitSuffix(m.batchNumber) === null) ?? members[0];
+    const children = members.filter((m) => splitSuffix(m.batchNumber) !== null);
+    groups.push({ parent, children, members });
   }
-  return numbers;
-}
 
-export function findBatchByScannedValue<T extends { batchNumber: string; batchNumberNorm?: string }>(
-  value: string,
-  batches: T[],
-): T | undefined {
-  const norm = normalizeId(value);
-  return batches.find(
-    (b) => (b.batchNumberNorm ?? normalizeId(b.batchNumber)) === norm,
-  );
-}
-
-/** PARENT, -02, or null when this batch is not part of a multi-roll family on the sheet. */
-export function rollDisplayLabel(
-  batchNumber: string,
-  sheetBatchNumbers: string[],
-): string | null {
-  const base = batchBaseNumber(batchNumber);
-  const family = sheetBatchNumbers.filter((n) => batchBaseNumber(n) === base);
-  if (family.length <= 1) return null;
-  const suffix = splitSuffix(batchNumber);
-  if (suffix === null) return 'PARENT';
-  return `-${suffix}`;
+  return groups.sort((a, b) => {
+    const rank = familySortRank(a.members) - familySortRank(b.members);
+    if (rank !== 0) return rank;
+    return a.parent.batchNumber.localeCompare(b.parent.batchNumber);
+  });
 }

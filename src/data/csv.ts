@@ -5,7 +5,7 @@ import {
 } from './csvMapping';
 import type { CsvParseResult } from './csvMapping';
 
-export type { CsvParseResult, ColumnMapping, CsvField } from './csvMapping';
+export type { CsvParseResult, ColumnMapping, CsvField, CsvImportAnalysis, CsvRowPreview } from './csvMapping';
 export {
   CSV_FIELD_LABELS,
   CSV_REQUIRED,
@@ -15,6 +15,9 @@ export {
   saveColumnMapping,
   peekCsvHeaders,
   parseCsvWithMapping,
+  analyzeCsvWithMapping,
+  parseCsvQuantity,
+  expandSplitBatches,
 } from './csvMapping';
 
 /** Legacy import path — auto-detects column mapping from headers. */

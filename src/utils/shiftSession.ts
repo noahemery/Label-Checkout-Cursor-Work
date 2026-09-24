@@ -13,9 +13,17 @@ function detectShift(d: Date): string {
   return '3rd';
 }
 
+/** Local calendar date — UTC `toISOString().slice(0, 10)` is the wrong day after 8pm Eastern. */
+function localIsoDate(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 /** Stable session id for the current calendar day — used in exports. */
 export function getShiftSession(): ShiftSession {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localIsoDate();
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     if (raw) {
@@ -32,5 +40,5 @@ export function getShiftSession(): ShiftSession {
 }
 
 export function todayExportDate(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localIsoDate();
 }

@@ -30,22 +30,15 @@ export function looksLikeGtin(value: string): boolean {
 }
 
 /**
- * True when the value matches a known label code (from the batch queue or
- * the sheet-label catalog). Today's label QR scans as the label code
- * (e.g. `24.4788.067.022.US0.18  V2`), so this is how QR scans are told
- * apart from batch numbers.
+ * True when the value matches a label code on a batch in the current print
+ * run. Legacy labels carry a bare label code in the QR (e.g.
+ * `24.4788.067.022.US0.18  V2`), so this is how those scans are told apart
+ * from batch numbers. Labels re-coded to the `LBL|` form never reach here.
  */
-export function matchesKnownLabelCode(
-  value: string,
-  batches: Batch[],
-  extraCodes: string[] = [],
-): boolean {
+export function matchesKnownLabelCode(value: string, batches: Batch[]): boolean {
   const norm = normalizeId(value);
   if (!norm) return false;
-  return (
-    batches.some((b) => b.labelCode && normalizeId(b.labelCode) === norm) ||
-    extraCodes.some((c) => normalizeId(c) === norm)
-  );
+  return batches.some((b) => b.labelCode && normalizeId(b.labelCode) === norm);
 }
 
 /**

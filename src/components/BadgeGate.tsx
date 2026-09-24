@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useAppData } from '../data/AppDataContext';
 import { useSession } from '../session/SessionContext';
+import type { Operator } from '../domain/types';
 
 interface BadgeGateProps {
-  /** Set when a non-badge scan happened while signed out. */
   notice: string | null;
   onOpenAdmin: () => void;
+}
+
+function userRole(op: Operator): 'admin' | 'operator' {
+  return op.role ?? 'operator';
 }
 
 export function BadgeGate({ notice, onOpenAdmin }: BadgeGateProps) {
@@ -13,7 +17,13 @@ export function BadgeGate({ notice, onOpenAdmin }: BadgeGateProps) {
   const { operators } = useAppData();
   const [manualOpen, setManualOpen] = useState(false);
 
-  // Stop the verification slots from scrolling into view behind the gate.
+  // One flat list — admins are ordinary profiles with a quiet side tag, sorted
+  // below the operators so the floor sees its own names first.
+  const profiles = [...operators].sort((a, b) => {
+    const roleRank = (op: Operator) => (userRole(op) === 'admin' ? 1 : 0);
+    return roleRank(a) - roleRank(b) || a.name.localeCompare(b.name);
+  });
+
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -37,25 +47,31 @@ export function BadgeGate({ notice, onOpenAdmin }: BadgeGateProps) {
         </div>
       )}
 
-      {/* Discreet fallback for demos / no reader connected. Audited as manual. */}
       <div className="badge-gate-manual">
         {manualOpen ? (
           <div className="manual-signin">
             <div className="manual-signin-hint">
-              Manual sign-in (logged in the audit trail as badge-less):
+              Choose your profile — recorded in the audit trail as a manual sign-in
             </div>
             {operators.length === 0 ? (
               <div className="manual-signin-empty">
-                No operators enrolled yet.
+                No users enrolled yet.
                 <button className="btn btn-ghost" onClick={onOpenAdmin}>
                   Open Admin to enroll
                 </button>
               </div>
             ) : (
-              <div className="manual-signin-list">
-                {operators.map((op) => (
-                  <button key={op.id} className="btn" onClick={() => void signInManual(op)}>
-                    {op.name}
+              <div className="profile-list">
+                {profiles.map((op) => (
+                  <button
+                    key={op.id}
+                    className="profile-row"
+                    onClick={() => void signInManual(op)}
+                  >
+                    <span className="profile-row-name">{op.name}</span>
+                    {userRole(op) === 'admin' && (
+                      <span className="profile-row-tag">admin</span>
+                    )}
                   </button>
                 ))}
               </div>

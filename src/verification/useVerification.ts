@@ -1,12 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { playBlip, playError, playSuccess } from '../audio/sounds';
 import { useSettings } from '../config/SettingsContext';
 import { useAppData } from '../data/AppDataContext';
-import { catalogLabelCodes } from '../data/logSheetPages';
-import { compareSides, emptySide, sideComplete } from '../domain/matching';
+import type { BatchFamilyGroup } from '../domain/batchFamily';
+import {
+  batchIsCheckable,
+  compareFamily,
+  memberPairFromLabelScan,
+  mismatchedPairs,
+  type FamilyCheckoutState,
+  type FamilyMemberPair,
+} from '../domain/familyCheckout';
+import { emptySide, sideComplete } from '../domain/matching';
 import type { MatchResult, SideData } from '../domain/matching';
 import { normalizeId } from '../domain/normalize';
-import type { LabelPayload, RawPayload, SheetPayload } from '../domain/payloads';
+import type { ScanPayload } from '../domain/payloads';
+import { PAYLOAD_KIND_LABEL } from '../domain/payloads';
 import {
   looksLikeGtin,
   looksLikeLabelCode,
@@ -17,28 +26,39 @@ import type { Batch, Operator } from '../domain/types';
 
 export interface RecheckPrompt {
   batch: Batch;
-  payload: SheetPayload | LabelPayload | RawPayload;
+  payload: ScanPayload;
   isScanner: boolean;
 }
 
+/** What a finished order is waiting for a badge to do. */
+export type OrderBadgeNeed = 'confirm' | null;
+
+export type OrderBadgeResult =
+  | 'confirmed'
+  | 'unknown'
+  | 'wrong_operator'
+  | 'not_waiting';
+
 /**
- * The two-scan handshake state machine.
+ * Order checkout state machine.
  *
- * Side 1 (label) = the physical printed label.
- * Side 2 (sheet) = the FMI B001 log sheet row.
+ * 1. Operator clicks an order in the batch log — it opens immediately
+ *    (`scanning`) on its first member.
+ * 2. Each member is checked by its printed `LBL|` QR alone, compared against
+ *    the D365 record for that member. A mismatch is recorded and the order
+ *    still advances, so the operator can get the rest of the run out.
+ * 3. When every member has been scanned the order holds at `complete`.
+ * 4. The signed-in operator's badge resolves it: matched members are written
+ *    verified, mismatched members are written flagged for a supervisor.
  *
- * Scanning a batch that is already verified at the start of a new handshake
- * prompts the operator to confirm a re-check (re-open is logged).
+ * Scanning labels never writes batch status — only `confirmOrderWithBadge`
+ * does. See the core control section in AGENTS.md.
  */
 
-export type SlotNeed =
-  | { side: 'label' | 'sheet'; need: 'batch' | 'code' }
-  | { side: null; need: null };
+export type SlotNeed = { side: 'label'; need: 'batch' | 'code' } | { side: null; need: null };
 
 export interface VerificationState {
   label: SideData;
-  sheet: SideData;
-  sheetExtra: { quantity: number | null; dom: string | null; doe: string | null } | null;
   result: MatchResult | null;
   verifiedBatchNumber: string | null;
   notice: string | null;
@@ -47,8 +67,6 @@ export interface VerificationState {
 function freshState(): VerificationState {
   return {
     label: emptySide(),
-    sheet: emptySide(),
-    sheetExtra: null,
     result: null,
     verifiedBatchNumber: null,
     notice: null,
@@ -58,61 +76,94 @@ function freshState(): VerificationState {
 export function nextNeed(s: VerificationState): SlotNeed {
   if (!s.label.batchNumber) return { side: 'label', need: 'batch' };
   if (!s.label.labelCode) return { side: 'label', need: 'code' };
-  if (!s.sheet.batchNumber) return { side: 'sheet', need: 'batch' };
-  if (!s.sheet.labelCode) return { side: 'sheet', need: 'code' };
   return { side: null, need: null };
+}
+
+const NOT_IN_RUN_MSG = 'This batch is NOT in today\u2019s print run — you can\u2019t check it out.';
+
+/**
+ * How far back a badge tap reaches when corroborating who was at the station.
+ *
+ * A session started by picking a profile off the list names someone without
+ * proving it. When that same profile badges out an order a minute or two
+ * later, the badge is real evidence that the person named on the earlier
+ * events was in fact standing there. Anything older than this is a different
+ * stretch of the shift and gets no such benefit of the doubt.
+ */
+const ATTRIBUTION_WINDOW_MS = 2 * 60 * 1000;
+
+/** Marks a mismatch whose operator was named by a profile pick, not a badge. */
+const UNPROVEN_SUFFIX = ' [profile sign-in — identity not badge-proven]';
+
+function wrongMemberMessage(fam: FamilyCheckoutState, expected: Batch): string {
+  const n = fam.memberBatchIds.length;
+  const i = fam.currentMemberIndex + 1;
+  return `This order expects ${expected.batchNumber} (label ${i} of ${n}). Scan that label, not a different run.`;
 }
 
 interface UseVerificationResult {
   state: VerificationState;
   need: SlotNeed;
+  familyCheckout: FamilyCheckoutState | null;
+  /** Parent of the active order. */
+  parentBatch: Batch | null;
+  /** All members of the active order, in run order. */
+  orderMembers: Batch[];
+  /** Member awaiting its printed label scan (only while scanning). */
+  currentMemberBatch: Batch | null;
+  /** Members of the finished order that did not match. */
+  orderMismatches: FamilyMemberPair[];
+  /** Non-null when a finished order needs a badge tap to resolve. */
+  awaitingBadge: OrderBadgeNeed;
+  confirmOrderWithBadge: (badgeId: string) => Promise<OrderBadgeResult>;
   recheckPrompt: RecheckPrompt | null;
-  handleScanPayload: (
-    payload: SheetPayload | LabelPayload | RawPayload,
-    isScanner: boolean,
-  ) => Promise<void>;
+  handleScanPayload: (payload: ScanPayload, isScanner: boolean) => Promise<void>;
   confirmRecheck: () => Promise<void>;
   dismissRecheck: () => void;
+  startFamilyCheckout: (family: BatchFamilyGroup) => void;
   reset: () => void;
-  flagMismatch: () => Promise<void>;
+}
+
+export interface VerificationSessionHooks {
+  /** True when the signed-in operator badged in rather than picking a profile. */
+  badgeProven: boolean;
+  /** Called when a badge tap proves a session that began as a profile pick. */
+  onBadgeProven?: () => void;
 }
 
 export function useVerification(
   operator: Operator | null,
   pageBatches: Batch[],
+  session: VerificationSessionHooks,
 ): UseVerificationResult {
   const { store, refreshBatches, logAudit } = useAppData();
   const { settings } = useSettings();
 
   const [state, setState] = useState<VerificationState>(freshState);
+  const [familyCheckout, setFamilyCheckout] = useState<FamilyCheckoutState | null>(null);
   const [recheckPrompt, setRecheckPrompt] = useState<RecheckPrompt | null>(null);
   const stateRef = useRef(state);
-  const advanceTimerRef = useRef<number | null>(null);
   const skipRecheckRef = useRef(false);
 
   const batchesRef = useRef(pageBatches);
   batchesRef.current = pageBatches;
   const operatorRef = useRef(operator);
   operatorRef.current = operator;
+  const familyRef = useRef(familyCheckout);
+  familyRef.current = familyCheckout;
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
   const update = useCallback((next: VerificationState) => {
     stateRef.current = next;
     setState(next);
   }, []);
 
-  const clearAdvanceTimer = () => {
-    if (advanceTimerRef.current !== null) {
-      window.clearTimeout(advanceTimerRef.current);
-      advanceTimerRef.current = null;
-    }
-  };
-
   const reset = useCallback(() => {
-    clearAdvanceTimer();
+    setFamilyCheckout(null);
+    setRecheckPrompt(null);
     update(freshState());
   }, [update]);
-
-  useEffect(() => () => clearAdvanceTimer(), []);
 
   const sound = useCallback(
     (kind: 'success' | 'error' | 'blip') => {
@@ -124,129 +175,266 @@ export function useVerification(
     [settings.soundEnabled],
   );
 
-  const findBatch = (batchNumber: string): Batch | undefined =>
-    batchesRef.current.find((b) => b.batchNumberNorm === normalizeId(batchNumber));
+  const findBatch = useCallback(
+    (batchNumber: string): Batch | undefined =>
+      batchesRef.current.find((b) => b.batchNumberNorm === normalizeId(batchNumber)),
+    [],
+  );
 
-  const NOT_ON_SHEET_MSG =
-    'This batch is NOT on today\u2019s log sheet — you can\u2019t check it out.';
+  const findBatchById = useCallback(
+    (id: string): Batch | undefined => batchesRef.current.find((b) => b.id === id),
+    [],
+  );
 
-  const rejectNotOnSheet = async (
-    s: VerificationState,
-    batchNumber: string,
-  ): Promise<VerificationState> => {
-    s.notice = NOT_ON_SHEET_MSG;
-    sound('error');
-    await logAudit({
-      type: 'scan',
-      operatorId: operatorRef.current?.id ?? null,
-      operatorName: operatorRef.current?.name ?? null,
-      batchNumber,
-      detail: `REJECTED — batch not on today\u2019s log sheet: ${batchNumber}`,
-    });
-    return s;
-  };
+  const parentBatch = useMemo(
+    () =>
+      familyCheckout
+        ? (pageBatches.find((b) => b.id === familyCheckout.parentBatchId) ?? null)
+        : null,
+    [familyCheckout, pageBatches],
+  );
 
-  const isNewHandshakeBatchScan = (s: VerificationState): boolean => {
-    const need = nextNeed(s);
-    return need.side === 'label' && need.need === 'batch';
-  };
+  const orderMembers = useMemo(() => {
+    if (!familyCheckout) return [];
+    return familyCheckout.memberBatchIds
+      .map((id) => pageBatches.find((b) => b.id === id))
+      .filter((b): b is Batch => !!b);
+  }, [familyCheckout, pageBatches]);
 
-  const maybePromptRecheck = (
-    batch: Batch | undefined,
-    s: VerificationState,
-    payload: SheetPayload | LabelPayload | RawPayload,
-    isScanner: boolean,
-  ): boolean => {
-    if (!batch || batch.status !== 'verified' || skipRecheckRef.current) return false;
-    if (!isNewHandshakeBatchScan(s)) return false;
-    setRecheckPrompt({ batch, payload, isScanner });
-    sound('blip');
-    return true;
-  };
+  const currentMemberBatch = useMemo(() => {
+    if (!familyCheckout || familyCheckout.phase !== 'scanning') return null;
+    const id = familyCheckout.memberBatchIds[familyCheckout.currentMemberIndex];
+    return pageBatches.find((b) => b.id === id) ?? null;
+  }, [familyCheckout, pageBatches]);
 
-  const evaluate = useCallback(
-    async (s: VerificationState): Promise<VerificationState> => {
-      const batchNumber = s.sheet.batchNumber ?? s.label.batchNumber ?? null;
-      const onSheet = batchNumber ? findBatch(batchNumber) : undefined;
-      if (!onSheet) {
-        return rejectNotOnSheet(s, batchNumber ?? '?');
-      }
+  const orderMismatches = useMemo(
+    () => (familyCheckout ? mismatchedPairs(familyCheckout.completedPairs) : []),
+    [familyCheckout],
+  );
 
-      const result = compareSides(s.label, s.sheet);
-      const next = { ...s, result };
+  const rejectScan = useCallback(
+    async (
+      s: VerificationState,
+      message: string,
+      batchNumber: string | null,
+      detail: string,
+    ): Promise<VerificationState> => {
+      s.notice = message;
+      sound('error');
+      await logAudit({
+        type: 'scan',
+        operatorId: operatorRef.current?.id ?? null,
+        operatorName: operatorRef.current?.name ?? null,
+        batchNumber,
+        detail,
+      });
+      return s;
+    },
+    [logAudit, sound],
+  );
 
+  const rejectNotInRun = useCallback(
+    (s: VerificationState, batchNumber: string) =>
+      rejectScan(
+        s,
+        NOT_IN_RUN_MSG,
+        batchNumber,
+        `REJECTED — batch not in today\u2019s print run: ${batchNumber}`,
+      ),
+    [rejectScan],
+  );
+
+  const expectedMemberBatch = useCallback(
+    (fam: FamilyCheckoutState): Batch | undefined =>
+      findBatchById(fam.memberBatchIds[fam.currentMemberIndex]),
+    [findBatchById],
+  );
+
+  const maybePromptRecheck = useCallback(
+    (batch: Batch | undefined, payload: ScanPayload, isScanner: boolean): boolean => {
+      if (!batch || batch.status !== 'verified' || skipRecheckRef.current) return false;
+      setRecheckPrompt({ batch, payload, isScanner });
+      sound('blip');
+      return true;
+    },
+    [sound],
+  );
+
+  /**
+   * Record the member just scanned and move on.
+   *
+   * A mismatch is logged immediately — it is real information even if the
+   * order is later abandoned — but it does not end the order. The operator
+   * keeps going so the rest of the run's labels can still be checked out.
+   */
+  const finishFamilyMember = useCallback(
+    async (
+      fam: FamilyCheckoutState,
+      pair: FamilyMemberPair,
+    ): Promise<VerificationState> => {
       const op = operatorRef.current;
 
-      if (result.ok && op) {
-        await store.verifyRow(onSheet.id, op);
-        await refreshBatches();
-        await logAudit({
-          type: 'verify',
-          operatorId: op.id,
-          operatorName: op.name,
-          batchNumber: onSheet.batchNumber,
-          detail: `Two-scan match confirmed. Label code ${s.label.labelCode}.`,
-        });
-        next.verifiedBatchNumber = onSheet.batchNumber;
-        sound('success');
-        clearAdvanceTimer();
-        advanceTimerRef.current = window.setTimeout(() => {
-          advanceTimerRef.current = null;
-          update(freshState());
-        }, settings.autoAdvanceMs);
-      } else if (!result.ok) {
-        const differences = result.comparisons
+      if (!pair.result.ok) {
+        const differences = pair.result.comparisons
           .filter((c) => !c.ok)
-          .map((c) => `${c.field}: label "${c.labelValue}" vs sheet "${c.sheetValue}"`)
+          .map((c) => `${c.field}: label "${c.labelValue}" vs expected "${c.sheetValue}"`)
           .join('; ');
         await logAudit({
           type: 'mismatch',
           operatorId: op?.id ?? null,
           operatorName: op?.name ?? null,
-          batchNumber,
-          detail: `MISMATCH — ${differences}`,
+          batchNumber: pair.batchNumber,
+          detail:
+            `ORDER MISMATCH at ${pair.batchNumber} — ${differences}` +
+            (sessionRef.current.badgeProven ? '' : UNPROVEN_SUFFIX),
         });
         sound('error');
       }
-      return next;
+
+      const completedPairs = [...fam.completedPairs, pair];
+      const nextIndex = fam.currentMemberIndex + 1;
+
+      if (nextIndex >= fam.memberBatchIds.length) {
+        const bad = mismatchedPairs(completedPairs);
+        await logAudit({
+          type: 'scan',
+          operatorId: op?.id ?? null,
+          operatorName: op?.name ?? null,
+          batchNumber: fam.parentBatchNumber,
+          detail:
+            bad.length === 0
+              ? `Order scanned clean — ${completedPairs.length} label${completedPairs.length === 1 ? '' : 's'} matched (awaiting badge confirm)`
+              : `Order scanned with ${bad.length} mismatch${bad.length === 1 ? '' : 'es'} of ${completedPairs.length} (awaiting badge confirm)`,
+        });
+        if (bad.length === 0) sound('success');
+        setFamilyCheckout({
+          ...fam,
+          phase: 'complete',
+          completedPairs,
+          currentMemberIndex: nextIndex,
+          lastRecordedBatchNumber: pair.batchNumber,
+        });
+        return {
+          ...freshState(),
+          result: compareFamily(completedPairs),
+          verifiedBatchNumber: fam.parentBatchNumber,
+        };
+      }
+
+      if (pair.result.ok) sound('blip');
+      setFamilyCheckout({
+        ...fam,
+        completedPairs,
+        currentMemberIndex: nextIndex,
+        lastRecordedBatchNumber: pair.batchNumber,
+      });
+      return freshState();
     },
-    [store, refreshBatches, logAudit, sound, settings.autoAdvanceMs, update],
+    [logAudit, sound],
+  );
+
+  /** The scanned label is complete — check it against the expected member. */
+  const evaluateMember = useCallback(
+    async (s: VerificationState): Promise<VerificationState> => {
+      const fam = familyRef.current;
+      if (!fam || fam.phase !== 'scanning') return s;
+
+      const expected = expectedMemberBatch(fam);
+      if (!expected) {
+        return rejectScan(
+          s,
+          'This order is out of sync with the batch log — press Start over.',
+          s.label.batchNumber,
+          `REJECTED — expected member index ${fam.currentMemberIndex} missing from the page`,
+        );
+      }
+
+      if (normalizeId(s.label.batchNumber ?? '') !== expected.batchNumberNorm) {
+        return rejectScan(
+          s,
+          wrongMemberMessage(fam, expected),
+          s.label.batchNumber,
+          `REJECTED — wrong order member: expected ${expected.batchNumber}, got ${s.label.batchNumber}`,
+        );
+      }
+
+      if (!batchIsCheckable(expected)) {
+        return rejectScan(
+          s,
+          `${expected.batchNumber} has no label code in the import — an admin must fix it before this order can be checked out.`,
+          expected.batchNumber,
+          `REJECTED — member ${expected.batchNumber} has no label code in the D365 import`,
+        );
+      }
+
+      return finishFamilyMember(fam, memberPairFromLabelScan(expected, s.label));
+    },
+    [finishFamilyMember, rejectScan, expectedMemberBatch],
   );
 
   const applyPayload = useCallback(
     async (
-      payload: SheetPayload | LabelPayload | RawPayload,
+      payload: ScanPayload,
       isScanner: boolean,
       s: VerificationState,
     ): Promise<VerificationState> => {
+      const fam = familyRef.current;
+
+      if (!fam) {
+        s.notice = 'Click an order in the batch log to start a checkout.';
+        sound('error');
+        return s;
+      }
+      if (fam.phase === 'complete') {
+        s.notice = 'Order finished — badge to check it out, or press Start over.';
+        sound('error');
+        return s;
+      }
+
+      if (payload.kind === 'unsupported') {
+        return rejectScan(
+          s,
+          payload.reason,
+          null,
+          `REJECTED — ${payload.formId} payload version ${payload.version} not supported: ${payload.raw.slice(0, 120)}`,
+        );
+      }
+
       if (payload.kind === 'sheet') {
+        return rejectScan(
+          s,
+          'That\u2019s the old paper log sheet QR. Pick the order on screen, then scan the printed labels.',
+          payload.batchNumber || null,
+          `REJECTED — legacy sheet QR is not accepted: ${payload.raw.slice(0, 120)}`,
+        );
+      }
+
+      if (payload.kind === 'reference') {
+        return rejectScan(
+          s,
+          'That\u2019s a reference QR, not a printed label. Scan the QR on the label roll.',
+          payload.batchNumber || null,
+          `REJECTED — reference QR scanned during order ${fam.parentBatchNumber}`,
+        );
+      }
+
+      if (payload.kind === 'label') {
+        if (sideComplete(s.label)) {
+          return rejectScan(
+            s,
+            'That label is already recorded — press Start over to redo this order.',
+            s.label.batchNumber,
+            `REJECTED — printed label QR re-scanned before the order advanced: ${payload.raw.slice(0, 120)}`,
+          );
+        }
         if (!payload.batchNumber) {
-          s.notice = 'Sheet code is missing a batch number — re-scan or type the batch.';
+          s.notice = 'That label QR has no batch number — type the batch number instead.';
           sound('error');
           return s;
         }
         const known = findBatch(payload.batchNumber);
-        if (!known) {
-          return rejectNotOnSheet(s, payload.batchNumber);
-        }
-        s.sheet = {
-          batchNumber: payload.batchNumber,
-          itemNumber: payload.itemNumber,
-          labelCode: payload.labelCode,
-          knownBatch: true,
-        };
-        s.sheetExtra = { quantity: payload.quantity, dom: payload.dom, doe: payload.doe };
-      } else if (payload.kind === 'label') {
-        if (!payload.batchNumber) {
-          s.notice = 'Label code is missing a batch number — scan the batch barcode instead.';
-          sound('error');
-          return s;
-        }
-        const known = findBatch(payload.batchNumber);
-        if (!known) {
-          return rejectNotOnSheet(s, payload.batchNumber);
-        }
-        if (maybePromptRecheck(known, s, payload, isScanner)) return s;
+        if (!known) return rejectNotInRun(s, payload.batchNumber);
+        if (maybePromptRecheck(known, payload, isScanner)) return s;
         s.label = {
           batchNumber: payload.batchNumber,
           itemNumber: payload.itemNumber,
@@ -254,18 +442,19 @@ export function useVerification(
           knownBatch: true,
         };
       } else {
+        // Typed or 1D fallback when a label QR will not read.
         const target = nextNeed(s);
         if (!target.side) return s;
 
-        const side = target.side === 'label' ? { ...s.label } : { ...s.sheet };
+        const side = { ...s.label };
         const isLabelCode =
-          matchesKnownLabelCode(payload.value, batchesRef.current, catalogLabelCodes()) ||
+          matchesKnownLabelCode(payload.value, batchesRef.current) ||
           looksLikeLabelCode(payload.value);
 
         if (target.need === 'code') {
           if (side.batchNumber && normalizeId(payload.value) === normalizeId(side.batchNumber)) {
             s.notice =
-              'That\u2019s the batch number again — now scan the QR code on the label (the label code), or type it.';
+              'That\u2019s the batch number again — now scan or type the label code from the printed label.';
             sound('error');
             return s;
           }
@@ -274,12 +463,6 @@ export function useVerification(
           side.labelCode = payload.value;
         } else {
           const batch = findBatch(payload.value);
-          if (
-            target.side === 'label' &&
-            maybePromptRecheck(batch, s, payload, isScanner)
-          ) {
-            return s;
-          }
           if (!batch) {
             if (
               matchesProductCode(payload.value, batchesRef.current) ||
@@ -290,45 +473,74 @@ export function useVerification(
               sound('error');
               return s;
             }
-            return rejectNotOnSheet(s, payload.value);
+            return rejectNotInRun(s, payload.value);
           }
+          if (maybePromptRecheck(batch, payload, isScanner)) return s;
           side.batchNumber = batch.batchNumber;
           side.knownBatch = true;
-          if (!side.itemNumber) side.itemNumber = batch.itemNumber;
         }
 
-        if (target.side === 'label') s.label = side;
-        else s.sheet = side;
+        s.label = side;
       }
 
       await logAudit({
         type: 'scan',
         operatorId: operatorRef.current?.id ?? null,
         operatorName: operatorRef.current?.name ?? null,
-        batchNumber: s.label.batchNumber ?? s.sheet.batchNumber,
-        detail: `${payload.kind === 'raw' ? 'Raw/typed entry' : payload.kind === 'sheet' ? 'Sheet QR' : 'Label QR'}: ${payload.raw.slice(0, 120)}`,
+        batchNumber: s.label.batchNumber,
+        detail: `${PAYLOAD_KIND_LABEL[payload.kind]}: ${payload.raw.slice(0, 120)}`,
       });
 
-      if (sideComplete(s.label) && sideComplete(s.sheet)) {
-        return evaluate(s);
-      }
+      if (sideComplete(s.label)) return evaluateMember(s);
+
       sound('blip');
       return s;
     },
-    [logAudit, evaluate, sound],
+    [
+      logAudit,
+      evaluateMember,
+      sound,
+      rejectScan,
+      rejectNotInRun,
+      maybePromptRecheck,
+      findBatch,
+    ],
+  );
+
+  /**
+   * Clicking an order opens it. The operator has declared which order they are
+   * standing in front of by picking it; the machine still checks every label.
+   */
+  const startFamilyCheckout = useCallback(
+    (family: BatchFamilyGroup) => {
+      setRecheckPrompt(null);
+      const op = operatorRef.current;
+      const memberCount = family.members.length;
+      setFamilyCheckout({
+        phase: 'scanning',
+        parentBatchId: family.parent.id,
+        parentBatchNumber: family.parent.batchNumber,
+        memberBatchIds: family.members.map((m) => m.id),
+        currentMemberIndex: 0,
+        completedPairs: [],
+        lastRecordedBatchNumber: null,
+      });
+      update(freshState());
+      void logAudit({
+        type: 'order_open',
+        operatorId: op?.id ?? null,
+        operatorName: op?.name ?? null,
+        batchNumber: family.parent.batchNumber,
+        detail: `Order opened at station — ${memberCount} label${memberCount === 1 ? '' : 's'} to check`,
+      });
+    },
+    [update, logAudit],
   );
 
   const handleScanPayload = useCallback(
-    async (payload: SheetPayload | LabelPayload | RawPayload, isScanner: boolean) => {
+    async (payload: ScanPayload, isScanner: boolean) => {
       if (recheckPrompt) return;
-
-      let s: VerificationState = { ...stateRef.current, notice: null };
-
-      if (s.result) {
-        clearAdvanceTimer();
-        s = freshState();
-      }
-
+      const s: VerificationState = { ...stateRef.current, notice: null };
       update(await applyPayload(payload, isScanner, s));
     },
     [recheckPrompt, applyPayload, update],
@@ -348,8 +560,6 @@ export function useVerification(
       detail: `Check back in started (was verified by ${prompt.batch.verifiedByName ?? '?'} at ${prompt.batch.verifiedAt ?? '?'})`,
     });
     setRecheckPrompt(null);
-    clearAdvanceTimer();
-    update(freshState());
     skipRecheckRef.current = true;
     update(await applyPayload(prompt.payload, prompt.isScanner, freshState()));
     skipRecheckRef.current = false;
@@ -357,39 +567,157 @@ export function useVerification(
 
   const dismissRecheck = useCallback(() => setRecheckPrompt(null), []);
 
-  const flagMismatch = useCallback(async () => {
-    const s = stateRef.current;
-    if (!s.result || s.result.ok) return;
-    const batchNumber = s.sheet.batchNumber ?? s.label.batchNumber ?? '';
-    const batch = findBatch(batchNumber);
-    if (!batch) {
-      update(await rejectNotOnSheet(s, batchNumber));
-      return;
-    }
-    await store.flagRow(batch.id);
-    await refreshBatches();
-    const differences = s.result.comparisons
-      .filter((c) => !c.ok)
-      .map((c) => `${c.field}: label "${c.labelValue}" vs sheet "${c.sheetValue}"`)
-      .join('; ');
-    await logAudit({
-      type: 'flag',
-      operatorId: operatorRef.current?.id ?? null,
-      operatorName: operatorRef.current?.name ?? null,
-      batchNumber: batch.batchNumber,
-      detail: `Flagged for supervisor — ${differences}`,
-    });
-    reset();
-  }, [store, refreshBatches, logAudit, reset, update]);
+  const awaitingBadge: OrderBadgeNeed = familyCheckout?.phase === 'complete' ? 'confirm' : null;
+
+  /**
+   * Tie recent unproven mismatches to the badge that just tapped.
+   *
+   * Nothing is rewritten — audit rows are append-only by design. This adds a
+   * dated note saying the same profile checked an order out with a real badge
+   * shortly afterwards, which is what makes "they just didn't badge in" a
+   * defensible reading of the earlier mismatch rather than a guess.
+   */
+  const corroborateRecentEvents = useCallback(
+    async (confirmer: Operator, parentBatchNumber: string) => {
+      const cutoff = Date.now() - ATTRIBUTION_WINDOW_MS;
+      const recent = await store.getAuditEvents(200);
+      const orphaned = recent.filter(
+        (e) =>
+          e.type === 'mismatch' &&
+          e.operatorId === confirmer.id &&
+          e.detail.includes(UNPROVEN_SUFFIX) &&
+          Date.parse(e.ts) >= cutoff,
+      );
+      if (orphaned.length === 0) return;
+
+      const batches = [...new Set(orphaned.map((e) => e.batchNumber ?? '?'))].join(', ');
+      await logAudit({
+        type: 'badge_attribution',
+        operatorId: confirmer.id,
+        operatorName: confirmer.name,
+        batchNumber: parentBatchNumber,
+        detail:
+          `${confirmer.name} badged out order ${parentBatchNumber} within ` +
+          `${Math.round(ATTRIBUTION_WINDOW_MS / 60000)} minutes of ${orphaned.length} ` +
+          `unproven mismatch${orphaned.length === 1 ? '' : 'es'} (${batches}) logged under the ` +
+          `same profile — same person at the station, badge confirmed here.`,
+      });
+    },
+    [store, logAudit],
+  );
+
+  /**
+   * The badge tap that checks out a finished order.
+   *
+   * The badge must belong to whoever is signed in: the person who did the
+   * scanning is the person who signs for it. Tapping also proves a session
+   * that was started by picking a profile off the list, which is what
+   * `onBadgeProven` records.
+   *
+   * Matched members are written verified. Mismatched members are written
+   * flagged so a supervisor sees them, and are never counted as checked out.
+   * This is the only place batch status is written.
+   */
+  const confirmOrderWithBadge = useCallback(
+    async (badgeId: string): Promise<OrderBadgeResult> => {
+      const fam = familyRef.current;
+      if (!fam || fam.phase !== 'complete') return 'not_waiting';
+
+      const confirmer = await store.getOperatorByBadge(badgeId);
+      if (!confirmer) {
+        update(
+          await rejectScan(
+            { ...stateRef.current },
+            'That badge is not enrolled — it cannot check out this order. A supervisor must enroll it first.',
+            fam.parentBatchNumber,
+            `REJECTED — unenrolled badge tried to check out order ${fam.parentBatchNumber}`,
+          ),
+        );
+        return 'unknown';
+      }
+
+      const sessionOp = operatorRef.current;
+      if (sessionOp && confirmer.id !== sessionOp.id) {
+        update(
+          await rejectScan(
+            { ...stateRef.current },
+            `This station is signed in as ${sessionOp.name}. ${confirmer.name} cannot check out their order — ${sessionOp.name} must badge, or sign out and start over.`,
+            fam.parentBatchNumber,
+            `REJECTED — ${confirmer.name} tried to check out order ${fam.parentBatchNumber} while signed in as ${sessionOp.name}`,
+          ),
+        );
+        return 'wrong_operator';
+      }
+
+      // The badge just proved who is at the station, even if the session began
+      // as a profile pick — and that evidence reaches backwards a little way.
+      const wasProven = sessionRef.current.badgeProven;
+      sessionRef.current.onBadgeProven?.();
+      if (!wasProven) await corroborateRecentEvents(confirmer, fam.parentBatchNumber);
+
+      const good = fam.completedPairs.filter((p) => p.result.ok);
+      const bad = mismatchedPairs(fam.completedPairs);
+
+      for (const pair of good) {
+        await store.verifyRow(pair.batchId, confirmer);
+        await logAudit({
+          type: 'verify',
+          operatorId: confirmer.id,
+          operatorName: confirmer.name,
+          batchNumber: pair.batchNumber,
+          detail: `Checked out with order ${fam.parentBatchNumber} — label code ${pair.label.labelCode}`,
+        });
+      }
+
+      for (const pair of bad) {
+        await store.flagRow(pair.batchId);
+        const differences = pair.result.comparisons
+          .filter((c) => !c.ok)
+          .map((c) => `${c.field}: label "${c.labelValue}" vs expected "${c.sheetValue}"`)
+          .join('; ');
+        await logAudit({
+          type: 'flag',
+          operatorId: confirmer.id,
+          operatorName: confirmer.name,
+          batchNumber: pair.batchNumber,
+          detail: `Flagged for supervisor at checkout of order ${fam.parentBatchNumber} — ${differences}`,
+        });
+      }
+
+      await refreshBatches();
+      sound(bad.length === 0 ? 'success' : 'blip');
+      setFamilyCheckout(null);
+      update({
+        ...freshState(),
+        notice:
+          bad.length === 0
+            ? `Order ${fam.parentBatchNumber} checked out by ${confirmer.name} — ${good.length} label${good.length === 1 ? '' : 's'} verified.`
+            : `Order ${fam.parentBatchNumber} closed by ${confirmer.name} — ${good.length} verified, ${bad.length} flagged for a supervisor.`,
+      });
+      return 'confirmed';
+    },
+    [store, refreshBatches, logAudit, sound, update, rejectScan, corroborateRecentEvents],
+  );
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   return {
     state,
     need: nextNeed(state),
+    familyCheckout,
+    parentBatch,
+    orderMembers,
+    currentMemberBatch,
+    orderMismatches,
+    awaitingBadge,
+    confirmOrderWithBadge,
     recheckPrompt,
     handleScanPayload,
     confirmRecheck,
     dismissRecheck,
+    startFamilyCheckout,
     reset,
-    flagMismatch,
   };
 }

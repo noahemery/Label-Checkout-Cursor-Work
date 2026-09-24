@@ -188,7 +188,7 @@ export function openPrintableCheckoutSummary(
       <span><strong>Date:</strong> ${escapeHtml(dateLabel)}</span>
       <span><strong>Shift:</strong> ${escapeHtml(session.shift)}</span>
       <span><strong>Session:</strong> ${escapeHtml(session.id)}</span>
-      ${sheetReference ? `<span><strong>Log sheet:</strong> ${escapeHtml(sheetReference)}</span>` : ''}
+      ${sheetReference ? `<span><strong>Print run:</strong> ${escapeHtml(sheetReference)}</span>` : ''}
     </div>
   </header>
   <div class="stats">
@@ -205,7 +205,7 @@ export function openPrintableCheckoutSummary(
     <tbody>${tableRows}</tbody>
   </table>`
   }
-  <footer>Generated ${escapeHtml(new Date().toLocaleString())} · Label Verification System (FMI B001 companion)</footer>
+  <footer>Generated ${escapeHtml(new Date().toLocaleString())} · Label Verification System</footer>
   <p class="no-print" style="margin-top:20px"><button onclick="window.print()">Print</button></p>
   <script>window.onload=function(){window.print()}</script>
 </body>

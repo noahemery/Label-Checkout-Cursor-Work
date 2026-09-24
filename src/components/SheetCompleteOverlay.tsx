@@ -25,7 +25,7 @@ export function SheetCompleteOverlay({
       <div className="sheet-complete-title">ALL LABELS CHECKED OUT</div>
       <div className="sheet-complete-ref">{referenceNumber}</div>
       <div className="sheet-complete-sub">
-        Every batch on this sheet ({batchCount}) is verified.
+        All {batchCount} label{batchCount === 1 ? '' : 's'} in this print run are verified.
         <br />
         Saved on this device — status is remembered after refresh.
       </div>
