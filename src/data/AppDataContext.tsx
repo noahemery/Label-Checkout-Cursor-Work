@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react';
 import type { AuditEvent, Batch, ImportSession, Operator } from '../domain/types';
 import type { AuditInput, DataStore } from './DataStore';
+import { BACKUP_FOLDER_KEY, BACKUP_LAST_STATUS_KEY, runDailyBackup } from './backup';
 import { createStore, type StoreKind } from './createStore';
 
 /**
@@ -102,6 +103,30 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     void refreshOperators();
     void refreshAudit();
   }, [store, refreshBatches, refreshImportSessions, refreshOperators, refreshAudit]);
+
+  // One snapshot per day, attempted at launch. Idempotent by filename, so a
+  // second launch the same day writes nothing. Never blocks startup and never
+  // surfaces an error here — Admin → Settings reports the outcome, because a
+  // backup problem is a supervisor's problem, not something to stop a shift.
+  useEffect(() => {
+    if (!store) return;
+    void (async () => {
+      try {
+        const folder = await store.getSetting(BACKUP_FOLDER_KEY);
+        if (folder) await runDailyBackup(store, folder);
+      } catch (err) {
+        await store
+          .setSetting(
+            BACKUP_LAST_STATUS_KEY,
+            JSON.stringify({
+              at: new Date().toISOString(),
+              text: `Backup failed before it started — ${err instanceof Error ? err.message : String(err)}`,
+            }),
+          )
+          .catch(() => null);
+      }
+    })();
+  }, [store]);
 
   const value = useMemo(
     () =>

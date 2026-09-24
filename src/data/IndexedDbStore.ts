@@ -5,6 +5,7 @@ import { buildReferenceQrPayload } from '../domain/referenceQr';
 import { newId, nowIso } from '../domain/types';
 import type { AuditEvent, Batch, ImportSession, Operator, UserRole } from '../domain/types';
 import type { AuditInput, BatchInput, DataStore, ImportMeta, ImportResult } from './DataStore';
+import type { RosterImportResult } from './roster';
 
 interface LvsDb extends DBSchema {
   batches: {
@@ -320,6 +321,34 @@ export class IndexedDbStore implements DataStore {
   async removeOperator(operatorId: string): Promise<void> {
     const db = await this.dbPromise;
     await db.delete('operators', operatorId);
+  }
+
+  async upsertOperators(operators: Operator[]): Promise<RosterImportResult> {
+    const db = await this.dbPromise;
+    let added = 0;
+    let updated = 0;
+    let unchanged = 0;
+
+    for (const incoming of operators) {
+      const badgeIdNorm = normalizeId(incoming.badgeIdNorm);
+      const existing = await db.getFromIndex('operators', 'byBadgeIdNorm', badgeIdNorm);
+
+      if (!existing) {
+        await db.put('operators', { ...incoming, badgeIdNorm });
+        added++;
+        continue;
+      }
+      // Keep the local id: audit rows already written here point at it, and
+      // rewriting it would orphan them.
+      if (existing.name === incoming.name && (existing.role ?? 'operator') === incoming.role) {
+        unchanged++;
+        continue;
+      }
+      await db.put('operators', { ...existing, name: incoming.name, role: incoming.role });
+      updated++;
+    }
+
+    return { added, updated, unchanged };
   }
 
   // ---- Audit ---------------------------------------------------------

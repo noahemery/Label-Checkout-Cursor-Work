@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
 import { useSettings } from '../config/SettingsContext';
 import {
   minutesToSessionTimeout,
@@ -8,6 +8,15 @@ import {
   sessionTimeoutToMinutes,
 } from '../config/settings';
 import { useAppData } from '../data/AppDataContext';
+import {
+  BACKUP_FOLDER_KEY,
+  BACKUP_LAST_STATUS_KEY,
+  describeBackupOutcome,
+  parseBackupStatus,
+  runDailyBackup,
+  type BackupStatusRecord,
+} from '../data/backup';
+import { downloadRoster, parseRosterFile, summarizeRosterImport } from '../data/roster';
 import { useSheetPage } from '../data/SheetPageContext';
 import { useSession } from '../session/SessionContext';
 
@@ -326,6 +335,45 @@ function PeopleTab() {
   const [enrollRole, setEnrollRole] = useState<'admin' | 'operator'>('operator');
   const [message, setMessage] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<{ id: string; name: string } | null>(null);
+  const rosterFileRef = useRef<HTMLInputElement>(null);
+  const [rosterBusy, setRosterBusy] = useState(false);
+
+  const exportRoster = () => {
+    if (operators.length === 0) {
+      setMessage('No badges enrolled here yet — nothing to export.');
+      return;
+    }
+    const filename = downloadRoster(operators);
+    setMessage(`Exported ${operators.length} badge${operators.length === 1 ? '' : 's'} to ${filename}.`);
+  };
+
+  const importRoster = async (file: File) => {
+    setRosterBusy(true);
+    setMessage(null);
+    try {
+      const incoming = parseRosterFile(await file.text());
+      const result = await store.upsertOperators(incoming);
+      await refreshOperators();
+      await logAudit({
+        type: 'enroll',
+        operatorId: operator?.id ?? null,
+        operatorName: operator?.name ?? null,
+        batchNumber: null,
+        detail: `Roster imported from "${file.name}": ${summarizeRosterImport(result)}`,
+      });
+      setMessage(`Roster imported — ${summarizeRosterImport(result)}.`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Roster import failed.');
+    } finally {
+      setRosterBusy(false);
+    }
+  };
+
+  const onRosterPick = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) void importRoster(file);
+  };
 
   const admins = operators.filter((op) => (op.role ?? 'operator') === 'admin');
   const floorOps = operators.filter((op) => (op.role ?? 'operator') === 'operator');
@@ -480,6 +528,39 @@ function PeopleTab() {
         </div>
       )}
 
+      <h3>Move badges to another station</h3>
+      <p className="admin-hint">
+        Enroll everyone once, then carry the roster to the floor station instead of re-scanning
+        thirty badges. Import matches people by <strong>badge ID</strong>: anyone new is added,
+        anyone already here has their name and role updated, and nobody is ever removed by an
+        import.
+      </p>
+      <div className="admin-roster-actions">
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={rosterBusy}
+          onClick={exportRoster}
+        >
+          Export roster…
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={rosterBusy}
+          onClick={() => rosterFileRef.current?.click()}
+        >
+          {rosterBusy ? 'Importing…' : 'Import roster…'}
+        </button>
+        <input
+          ref={rosterFileRef}
+          type="file"
+          accept=".json,application/json"
+          hidden
+          onChange={onRosterPick}
+        />
+      </div>
+
       <h3>Admins ({admins.length})</h3>
       <p className="admin-hint">Badge in opens the admin profile with CSV upload, activity, and settings.</p>
       {renderList(admins, 'No admins enrolled yet.', 'admin')}
@@ -495,8 +576,43 @@ function PeopleTab() {
 
 function SettingsTab() {
   const { settings, updateSettings } = useSettings();
-  const { storeKind } = useAppData();
+  const { store, storeKind } = useAppData();
   const timeoutMinutes = sessionTimeoutToMinutes(settings.sessionTimeoutMs);
+
+  const [backupFolder, setBackupFolder] = useState('');
+  const [backupStatus, setBackupStatus] = useState<BackupStatusRecord | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupSaved, setBackupSaved] = useState(false);
+
+  useEffect(() => {
+    void store.getSetting(BACKUP_FOLDER_KEY).then((v) => setBackupFolder(v ?? ''));
+    void store.getSetting(BACKUP_LAST_STATUS_KEY).then((v) => setBackupStatus(parseBackupStatus(v)));
+  }, [store]);
+
+  const saveBackupFolder = async () => {
+    await store.setSetting(BACKUP_FOLDER_KEY, backupFolder.trim());
+    setBackupSaved(true);
+    window.setTimeout(() => setBackupSaved(false), 2000);
+  };
+
+  const backupNow = async () => {
+    setBackupBusy(true);
+    try {
+      await store.setSetting(BACKUP_FOLDER_KEY, backupFolder.trim());
+      const outcome = await runDailyBackup(store, backupFolder);
+      setBackupStatus({ at: new Date().toISOString(), text: describeBackupOutcome(outcome) });
+    } catch (err) {
+      // runDailyBackup handles its own snapshot errors, so reaching here means
+      // the settings write failed. Say so rather than leave the button looking
+      // like it worked.
+      setBackupStatus({
+        at: new Date().toISOString(),
+        text: `Backup failed — ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setBackupBusy(false);
+    }
+  };
 
   return (
     <div className="admin-section">
@@ -506,8 +622,9 @@ function SettingsTab() {
           <>
             Running on SQLite. The database file is{' '}
             <code>label-verification.db</code> under{' '}
-            <code>%APPDATA%\com.alltech.labelverification</code>. Copy that file to
-            back up this station.
+            <code>%APPDATA%\com.alltech.labelverification</code>. Installing a new
+            version of the app does not touch it — only uninstalling or losing the
+            machine does.
           </>
         ) : (
           <>
@@ -516,6 +633,57 @@ function SettingsTab() {
           </>
         )}
       </p>
+
+      <h3>Daily backup</h3>
+      <p className="admin-hint">
+        This station holds the only copy of its audit trail. Point this at a synced
+        OneDrive folder or a network share and it writes one complete snapshot per day
+        at launch — <code>label-verification-2026-09-24.db</code>. Recovery is copying
+        that file back over the database; there is no import step.
+      </p>
+      <div className="admin-form">
+        <label>
+          Backup folder
+          <input
+            value={backupFolder}
+            onChange={(e) => setBackupFolder(e.target.value)}
+            placeholder="C:\Users\you\OneDrive - Alltech, Inc\Label Verification Backups"
+            spellCheck={false}
+            disabled={storeKind !== 'sqlite'}
+          />
+          <span className="admin-hint">
+            Leave empty to turn backups off. The folder must already exist.
+          </span>
+        </label>
+        <div className="admin-roster-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={backupBusy || storeKind !== 'sqlite'}
+            onClick={() => void saveBackupFolder()}
+          >
+            {backupSaved ? 'Saved' : 'Save folder'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={backupBusy || !backupFolder.trim() || storeKind !== 'sqlite'}
+            onClick={() => void backupNow()}
+          >
+            {backupBusy ? 'Backing up…' : 'Back up now'}
+          </button>
+        </div>
+        {backupStatus && (
+          <p
+            className={`admin-hint${backupStatus.text.startsWith('Backup failed') ? ' admin-hint-bad' : ''}`}
+            role="status"
+          >
+            {backupStatus.text}
+            <br />
+            Checked {new Date(backupStatus.at).toLocaleString()}
+          </p>
+        )}
+      </div>
 
       <h3>Session</h3>
       <div className="admin-form">

@@ -2720,6 +2720,20 @@ body {
   margin: 0.2rem 0 0.6rem;
 }
 
+/* A backup that has stopped working must not read like ordinary help text. */
+.admin-hint-bad {
+  color: var(--red);
+  font-weight: 600;
+}
+
+/* Roster export/import, and the backup folder controls. */
+.admin-roster-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0.2rem 0 0.9rem;
+}
+
 .admin-message {
   margin-top: 0.8rem;
   padding: 0.6rem 0.9rem;

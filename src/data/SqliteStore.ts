@@ -4,6 +4,7 @@ import { buildReferenceQrPayload } from '../domain/referenceQr';
 import { newId, nowIso } from '../domain/types';
 import type { AuditEvent, Batch, ImportSession, Operator, UserRole } from '../domain/types';
 import type { AuditInput, BatchInput, DataStore, ImportMeta, ImportResult } from './DataStore';
+import type { RosterImportResult } from './roster';
 import { SCHEMA_STATEMENTS, SCHEMA_VERSION, WAL_PRAGMA } from './sqliteSchema';
 
 /**
@@ -424,6 +425,41 @@ export class SqliteStore implements DataStore {
     await this.db.execute(`DELETE FROM operators WHERE id = $1`, [operatorId]);
   }
 
+  async upsertOperators(operators: Operator[]): Promise<RosterImportResult> {
+    let added = 0;
+    let updated = 0;
+    let unchanged = 0;
+
+    for (const incoming of operators) {
+      const badgeIdNorm = normalizeId(incoming.badgeIdNorm);
+      const existing = await this.getOperatorByBadge(badgeIdNorm);
+
+      if (!existing) {
+        await this.db.execute(
+          `INSERT INTO operators (id, badge_id_norm, name, role, created_at)
+             VALUES ($1, $2, $3, $4, $5)`,
+          [incoming.id, badgeIdNorm, incoming.name, incoming.role, incoming.createdAt],
+        );
+        added++;
+        continue;
+      }
+      // Keep the local id: audit rows already written here point at it, and
+      // rewriting it would orphan them.
+      if (existing.name === incoming.name && existing.role === incoming.role) {
+        unchanged++;
+        continue;
+      }
+      await this.db.execute(`UPDATE operators SET name = $1, role = $2 WHERE id = $3`, [
+        incoming.name,
+        incoming.role,
+        existing.id,
+      ]);
+      updated++;
+    }
+
+    return { added, updated, unchanged };
+  }
+
   // ---- Audit ---------------------------------------------------------
 
   async saveScanEvent(input: AuditInput): Promise<AuditEvent> {
@@ -472,5 +508,24 @@ export class SqliteStore implements DataStore {
            updated_at = excluded.updated_at`,
       [key, value, nowIso()],
     );
+  }
+
+  // ---- Backup --------------------------------------------------------
+
+  /**
+   * `VACUUM INTO` is the only correct way to copy a live SQLite database.
+   *
+   * Copying the file by hand while the app is running gives you whatever was
+   * flushed at that instant and leaves the WAL behind, so the copy can be torn
+   * or stale. `VACUUM INTO` writes a complete, already-checkpointed database
+   * that opens cleanly on its own — and it does it without locking the station
+   * out of scanning.
+   *
+   * SQLite refuses to overwrite an existing target. That is a feature here: it
+   * makes one backup per filename idempotent, so a daily snapshot can be
+   * attempted on every launch and quietly do nothing the second time.
+   */
+  async snapshotTo(absolutePath: string): Promise<void> {
+    await this.db.execute(`VACUUM INTO $1`, [absolutePath]);
   }
 }

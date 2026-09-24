@@ -153,6 +153,66 @@ Each D365 import creates an **import session** (`ImportSession` in IndexedDB sto
   delivery first (`lvs-queue-sort` in localStorage; alternate: sort by sheet / import time).
 - Flagged families always sort to the top regardless of the user's sort mode.
 
+## Getting data off a single station
+
+There is no server yet. Everything a station knows lives in its own SQLite file, so the two
+things that have to leave the machine — the audit trail and the badge roster — each have a file
+that carries them. Both are designed to retire when a server lands: the roster becomes an API
+call, and the backup becomes the server's problem.
+
+### Daily backup — `VACUUM INTO`
+
+[backup.ts](src/data/backup.ts) writes one dated snapshot per day to a folder set under
+Admin → Settings (`lvs-backup-folder`; empty means off). `SqliteStore.snapshotTo` issues
+`VACUUM INTO $1` and nothing else.
+
+`VACUUM INTO` is the only correct way to copy a live WAL database. Copying the `.db` file while
+the app is running gets you a torn read, because recent commits are still in the `-wal` sidecar.
+`VACUUM INTO` writes a complete, already-checkpointed database (journal mode `delete`, no
+sidecar files) without locking out scanning. Recovery is copying the file back over
+`label-verification.db` — no import step.
+
+Three behaviours the code leans on, all verified against real SQLite:
+
+- **A bound parameter works** — `VACUUM INTO $1` accepts the path as a parameter.
+- **The output is self-contained** — one file, restorable by itself.
+- **It refuses to overwrite an existing target**, raising `output file already exists`. That is
+  what makes a daily backup idempotent: the snapshot is attempted on *every* launch and quietly
+  does nothing the second time, with no date comparison anywhere. `looksLikeTargetExists` is
+  what separates that expected refusal from a real failure, so **do not "fix" it by deleting the
+  target first** — that would turn a safe no-op into an overwrite of the day's good backup.
+
+The backup runs from an effect in [AppDataContext.tsx](src/data/AppDataContext.tsx) and never
+blocks startup or shows an error on the floor. Every outcome is recorded to
+`lvs-backup-last-status` instead, which Admin → Settings renders — in red when it starts with
+"Backup failed". `lvs-backup-last-run` separately holds the last time a file was actually
+written, so a backup that has been broken for a week is visible as a stale date rather than
+hidden behind last week's success.
+
+`snapshotTo` is **optional on `DataStore`** and only `SqliteStore` implements it. A browser has
+no filesystem to write to, so the IndexedDB store leaves it undefined and the folder input is
+disabled unless `storeKind === 'sqlite'`.
+
+### Roster transfer
+
+[roster.ts](src/data/roster.ts) exports enrolled operators to
+`label-verification-roster-YYYY-MM-DD.json` and imports them through `store.upsertOperators`,
+matching on `badgeIdNorm`. This exists so a second station does not mean re-scanning every
+badge by hand.
+
+It is deliberately **one-directional — export from the station that owns the roster, import
+everywhere else.** There is no merge, because there is no correct answer when both sides edited
+the same person. Do not add one; add the server instead.
+
+On import, a badge already present **keeps the importing station's operator `id`**, because its
+own audit rows already point at that id and rewriting it would orphan them. The file's `id` is
+only used when the badge is new, so that audit trails from several stations line up on one
+person when they are eventually aggregated.
+
+`parseRosterFile` rejects anything that is not clearly a roster — wrong `kind`, a `version`
+newer than this build, no operators list, or no usable entries. A mis-picked file has to fail
+loudly rather than import zero operators and look like it worked.
+
 ## Testing without printed labels
 
 There is no automated test runner. Floor-style testing uses the real control flow:
@@ -170,6 +230,13 @@ imported rows. Happy-path synthetic LBLs match the database by design; mismatch 
 "Mismatch test" QR in the Test labels drawer, which sends a label code of `WRONG` so the prefix
 check fails. Synthetic LBLs still require per-member scans in run order and a badge confirm —
 never auto-fill the scanned side from `dbSideFromBatch`.
+
+Backup and roster need the **desktop** build — `npm run dev` in a browser has no SQLite and no
+filesystem, so `snapshotTo` is undefined there and a backup reports "unsupported" by design.
+Under `npm run desktop`: set a folder under Admin → Settings, press **Back up now**, and confirm
+a `label-verification-YYYY-MM-DD.db` appears. Press it a second time — the status must read
+"Today's backup already exists", not an error. For the roster, export from Admin → People, then
+import the same file back; the summary should say every badge already matched.
 
 ## Conventions
 
