@@ -15,6 +15,8 @@ import {
 } from '../data/csvMapping';
 import { useSheetPage } from '../data/SheetPageContext';
 import { useSession } from '../session/SessionContext';
+import { useDropFolder } from '../data/useDropFolder';
+import { describeHold } from '../data/dropFolder';
 
 const FIELDS = Object.keys(CSV_FIELD_LABELS) as CsvField[];
 
@@ -62,6 +64,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
   const { store, refreshBatches, refreshImportSessions, logAudit } = useAppData();
   const { activePageId, clearPrintRun, pageBatches } = useSheetPage();
   const { operator } = useSession();
+  const dropFolder = useDropFolder();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [headers, setHeaders] = useState<string[]>([]);
@@ -93,26 +96,46 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
     setError(null);
   };
 
-  const beginImportFile = (file: File) => {
+  /**
+   * `straightToPreview` is for files the station found by itself. The person
+   * still confirms the import, but they should not have to re-approve a column
+   * mapping that was already saved — the useful question about an export that
+   * arrived on its own is "are these the right rows", not "which column is the
+   * batch number".
+   */
+  const beginImportFile = (file: File, opts?: { straightToPreview?: boolean }) => {
     setError(null);
     setAnalysis(null);
     setStep('mapping');
     setBusy(true);
-    void peekCsvHeaders(file)
-      .then(({ headers: h, errors }) => {
+    void (async () => {
+      try {
+        const { headers: h, errors } = await peekCsvHeaders(file);
         if (h.length === 0) {
           setError(errors[0] ?? 'Could not read column headers from that file.');
           return;
         }
-        const saved = loadSavedColumnMapping();
-        const detected = autoDetectMapping(h);
-        const merged = { ...saved, ...detected };
+        const merged = { ...loadSavedColumnMapping(), ...autoDetectMapping(h) };
         setHeaders(h);
         setMapping(merged);
         setPendingFile(file);
         setImportOpen(true);
-      })
-      .finally(() => setBusy(false));
+
+        if (!opts?.straightToPreview || !merged.batchNumber) return;
+
+        const result = await analyzeCsvWithMapping(file, merged);
+        if (result.rows.length === 0) {
+          setError(result.parseErrors[0] ?? 'No batch rows found in file.');
+          return;
+        }
+        setAnalysis(result);
+        setStep('preview');
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Could not read that file.');
+      } finally {
+        setBusy(false);
+      }
+    })();
   };
 
   const onFilePick = (e: ChangeEvent<HTMLInputElement>) => {
@@ -136,6 +159,26 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : 'Could not load the sample export.');
+        setBusy(false);
+      });
+  };
+
+  const openFromDropFolder = (name: string) => {
+    setError(null);
+    setBusy(true);
+    void dropFolder
+      .read(name)
+      .then((text) => {
+        // The rest of the import path takes a File, so the text coming back
+        // from the shared folder is wrapped as one. A file that arrived on its
+        // own then goes through exactly the same parse, preview and confirm as
+        // one somebody picked by hand.
+        beginImportFile(new File([text], name, { type: 'text/csv' }), {
+          straightToPreview: true,
+        });
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Could not read that file.');
         setBusy(false);
       });
   };
@@ -230,8 +273,45 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
       .finally(() => setClearing(false));
   };
 
+  const holdNote = dropFolder.scan ? describeHold(dropFolder.scan.held) : null;
+
   return (
     <div className="d365-upload">
+      {/* Exports the station found on its own. Hidden while an import is in
+          progress so the banner cannot compete with the preview. */}
+      {!importOpen && dropFolder.enabled && (
+        <>
+          {dropFolder.scan?.ready.map((file) => (
+            <div className="d365-drop-banner" key={file.name} role="status">
+              <div className="d365-drop-text">
+                <strong>New export from D365</strong>
+                <span className="d365-drop-filename" title={file.name}>
+                  {file.name}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary d365-upload-btn"
+                disabled={busy || clearing}
+                onClick={() => openFromDropFolder(file.name)}
+              >
+                Review and import
+              </button>
+            </div>
+          ))}
+          {holdNote && (
+            <p className="d365-drop-hint" role="status">
+              {holdNote}
+            </p>
+          )}
+          {dropFolder.error && (
+            <p className="d365-drop-hint d365-drop-hint-bad" role="status">
+              Shared folder unreachable — {dropFolder.error}
+            </p>
+          )}
+        </>
+      )}
+
       <div className="d365-upload-top">
         <div className="zone-head-text">
           <h3 className="zone-title">D365 batch data</h3>

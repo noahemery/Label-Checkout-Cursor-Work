@@ -16,6 +16,7 @@ import {
   runDailyBackup,
   type BackupStatusRecord,
 } from '../data/backup';
+import { DROP_FOLDER_KEY, FolderSource } from '../data/dropFolder';
 import { downloadRoster, parseRosterFile, summarizeRosterImport } from '../data/roster';
 import { useSheetPage } from '../data/SheetPageContext';
 import { useSession } from '../session/SessionContext';
@@ -584,10 +585,46 @@ function SettingsTab() {
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupSaved, setBackupSaved] = useState(false);
 
+  const [dropFolder, setDropFolder] = useState('');
+  const [dropStatus, setDropStatus] = useState<string | null>(null);
+  const [dropSaving, setDropSaving] = useState(false);
+  const [dropSaved, setDropSaved] = useState(false);
+
   useEffect(() => {
     void store.getSetting(BACKUP_FOLDER_KEY).then((v) => setBackupFolder(v ?? ''));
     void store.getSetting(BACKUP_LAST_STATUS_KEY).then((v) => setBackupStatus(parseBackupStatus(v)));
+    void store.getSetting(DROP_FOLDER_KEY).then((v) => setDropFolder(v ?? ''));
   }, [store]);
+
+  /**
+   * Saving also reads the folder, because a typo in a path is invisible
+   * otherwise — the station would just never find an export and nobody would
+   * know whether that meant "none today" or "wrong folder".
+   */
+  const saveDropFolder = async () => {
+    const trimmed = dropFolder.trim();
+    setDropSaving(true);
+    try {
+      await store.setSetting(DROP_FOLDER_KEY, trimmed);
+      setDropSaved(true);
+      window.setTimeout(() => setDropSaved(false), 2000);
+
+      if (!trimmed) {
+        setDropStatus('Off — exports are imported by hand.');
+        return;
+      }
+      const files = await new FolderSource(trimmed).list();
+      setDropStatus(
+        files.length === 0
+          ? 'Folder reached. No CSV files in it right now.'
+          : `Folder reached — ${files.length} CSV file${files.length === 1 ? '' : 's'} visible.`,
+      );
+    } catch (err) {
+      setDropStatus(`Cannot read that folder — ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDropSaving(false);
+    }
+  };
 
   const saveBackupFolder = async () => {
     await store.setSetting(BACKUP_FOLDER_KEY, backupFolder.trim());
@@ -681,6 +718,49 @@ function SettingsTab() {
             {backupStatus.text}
             <br />
             Checked {new Date(backupStatus.at).toLocaleString()}
+          </p>
+        )}
+      </div>
+
+      <h3>D365 export folder</h3>
+      <p className="admin-hint">
+        Where the person who runs the D365 export saves the CSV — a SharePoint folder
+        synced to this station, or a network share. The station checks it every
+        30 seconds and offers anything it has not imported yet. Nothing is imported
+        without someone confirming it.
+      </p>
+      <div className="admin-form">
+        <label>
+          Watched folder
+          <input
+            value={dropFolder}
+            onChange={(e) => setDropFolder(e.target.value)}
+            placeholder="C:\Users\you\Alltech, Inc\Label Printing - D365 Exports"
+            spellCheck={false}
+            disabled={storeKind !== 'sqlite'}
+          />
+          <span className="admin-hint">
+            Leave empty to turn this off and import by hand. In OneDrive, set the folder
+            to &ldquo;Always keep on this device&rdquo; — the station cannot read a file
+            that has not downloaded.
+          </span>
+        </label>
+        <div className="admin-roster-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={dropSaving || storeKind !== 'sqlite'}
+            onClick={() => void saveDropFolder()}
+          >
+            {dropSaved ? 'Saved' : 'Save folder'}
+          </button>
+        </div>
+        {dropStatus && (
+          <p
+            className={`admin-hint${dropStatus.startsWith('Cannot') ? ' admin-hint-bad' : ''}`}
+            role="status"
+          >
+            {dropStatus}
           </p>
         )}
       </div>

@@ -1011,6 +1011,47 @@ body {
   gap: 0.85rem;
 }
 
+/* An export the station found in the shared folder by itself. Loud enough to
+   be noticed across the aisle, since nobody is looking for it. */
+.d365-drop-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--blue);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+}
+
+.d365-drop-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.d365-drop-filename {
+  font-size: 0.85rem;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.d365-drop-hint {
+  margin: 0 0 0.6rem;
+  font-size: 0.82rem;
+  color: var(--dim);
+}
+
+.d365-drop-hint-bad {
+  color: var(--red);
+  font-weight: 600;
+}
+
 .d365-upload-aside {
   display: flex;
   flex-direction: column;

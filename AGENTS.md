@@ -17,11 +17,17 @@ npm run desktop:build # NSIS installer under src-tauri/target/release/bundle
 npm run dev           # Vite in a browser (IndexedDB) — development without the desktop shell
 npm run build         # tsc -b && vite build
 npm run lint          # eslint .
+
+cargo test --manifest-path src-tauri/Cargo.toml --lib   # the Rust commands
 ```
 
-**There is no test framework in this repo.** No runner, no test files, no testing dependency in
-`package.json`. Do not tell the user to "run the tests," and never treat a passing build as
-evidence that behavior is preserved.
+**There is no test framework on the TypeScript side.** No runner, no test files, no testing
+dependency in `package.json`. Never treat a passing `npm run build` as evidence that behaviour
+is preserved.
+
+The **Rust side does have tests** — `cargo test --manifest-path src-tauri/Cargo.toml --lib`
+covers [drop_folder.rs](src-tauri/src/drop_folder.rs) against real files in a temp directory.
+That is the only green regression gate in the repo, and it only reaches the Rust commands.
 
 **`npm run build` passes. `npm run lint` currently fails** with 19 errors and 3 warnings, all
 pre-existing — so a red lint run is *not* a signal that you broke something. Compare against the
@@ -213,6 +219,69 @@ person when they are eventually aggregated.
 newer than this build, no operators list, or no usable entries. A mis-picked file has to fail
 loudly rather than import zero operators and look like it worked.
 
+## Getting the D365 export onto the station
+
+Somebody runs the export in D365 and saves the CSV into a SharePoint folder that syncs down to
+the station. The station polls that folder and offers anything it has not imported. The folder
+path is set under Admin → Settings (`lvs-drop-folder`; empty turns it off and import goes back
+to the file picker).
+
+**Finding a file is automatic; importing it is not.** The banner leads to the same mapping →
+preview → confirm path a hand-picked file goes through, because the batch log is what operators
+check labels against and nothing should appear there that nobody chose to put there. The only
+concession is that an auto-found file **skips the mapping step when a saved mapping already
+covers it** — the useful question about an export that arrived on its own is "are these the
+right rows", not "which column is the batch number".
+
+### Why there are two Rust commands and not the `fs` plugin
+
+The frontend has no filesystem access at all. [drop_folder.rs](src-tauri/src/drop_folder.rs)
+adds exactly two commands, `list_drop_folder` and `read_drop_file`, registered in
+[lib.rs](src-tauri/src/lib.rs). The `fs` plugin wants its allowed paths declared in a capability
+file at build time, but the folder here is typed in by a supervisor at runtime — which would
+mean granting a broad static scope. Two narrow commands are less machinery and a smaller hole.
+`read_drop_file` takes folder and name **separately** and rejects a name containing a separator,
+`..`, or `:`, so the frontend cannot ask for a path outside the configured folder.
+
+### The two Windows failure modes this is built around
+
+- **OneDrive Files On-Demand placeholders.** The filename is on disk while the contents are not.
+  Reading one blocks on a download that fails outright when the station is offline. The Rust
+  side checks the `OFFLINE` / `RECALL_ON_OPEN` / `RECALL_ON_DATA_ACCESS` attribute bits and
+  reports `placeholder: true`, and the UI says the file has not downloaded instead of hanging.
+  Tell whoever sets this up to mark the folder "Always keep on this device".
+- **A file still being written.** A CSV being copied in, or streamed down by OneDrive, is
+  visible and readable while incomplete. `SETTLE_MS` (20s) holds a file until its mtime has
+  stopped moving. This matters more than it looks: importing half an export would add part of a
+  print run, and because `importBatches` is additive and dedupes by batch number, **re-importing
+  the finished file afterwards would not fill in the gap.**
+
+### "Already imported" comes from `import_sessions`
+
+`scanDropFolder` ([dropFolder.ts](src/data/dropFolder.ts)) decides a file is new by comparing
+its name against the filenames on `import_sessions` — case- and whitespace-insensitive. There is
+no separate list of seen files, because that table is already the record of every CSV this
+station took in, it survives restarts, and **Clear run** wipes it, which is exactly when
+re-importing the same file should become possible again.
+
+The consequence: **a corrected export has to be saved under a new name.** Re-saving
+`print-run.csv` with fixed rows looks like a file that was already handled. That matches
+`importBatches` anyway, which skips batch numbers already on the page, so a same-name re-import
+would do nothing.
+
+### Where Graph slots in
+
+`CsvSource` is the seam — `label`, `list()`, `read(name)`. `FolderSource` is the only
+implementation today. When Graph access is approved, a `GraphSource` implements the same two
+methods against the SharePoint API and nothing above that file changes: the polling, the "is it
+new" rule, the settling window, and the banner all work off the interface. Graph calls have to
+go through the Rust side (`tauri-plugin-http`) rather than `fetch` — Graph will not serve
+app-only credentials to a browser origin, and CORS blocks it.
+
+Polling rather than a filesystem watcher is deliberate, and it is what makes the Graph swap
+possible: OneDrive materialises a synced file in several steps and a watcher fires on each one,
+while an HTTP source has nothing to watch at all.
+
 ## Testing without printed labels
 
 There is no automated test runner. Floor-style testing uses the real control flow:
@@ -237,6 +306,12 @@ Under `npm run desktop`: set a folder under Admin → Settings, press **Back up 
 a `label-verification-YYYY-MM-DD.db` appears. Press it a second time — the status must read
 "Today's backup already exists", not an error. For the roster, export from Admin → People, then
 import the same file back; the summary should say every badge already matched.
+
+For the watched folder, point Admin → Settings at any local folder and drop a CSV in. **Save
+folder** lists it immediately and reports how many CSVs it can see, so a typo in the path shows
+up as "Cannot read that folder" rather than as silence. The banner appears within one poll plus
+the settling window — allow about a minute. Import it, and it must stop being offered; press
+**Clear run** and it must come back.
 
 ## Conventions
 
