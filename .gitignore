@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Built NSIS installer, copied out of the cargo target dir for hand-off to the
+# floor station. Transferred by OneDrive/USB, not through git.
+installer/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
