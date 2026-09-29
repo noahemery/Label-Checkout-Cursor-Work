@@ -122,7 +122,8 @@ append-only, so this adds a note rather than rewriting history.
   [SessionContext.tsx:54-60](src/session/SessionContext.tsx#L54-L60) sets state and plays a tone
   only. A real gap for a compliance tool.
 - [csv.ts](src/data/csv.ts) is a legacy barrel over [csvMapping.ts](src/data/csvMapping.ts).
-  The D365 panel is the only CSV import UI; it uses saved column mapping, mapping step, and preview.
+  The D365 panel is the only CSV import UI. A saved column layout goes straight to preview;
+  mapping is the fallback when that layout does not fit the file.
   Admin no longer has a separate file picker.
 - **[AdminModal.tsx](src/components/AdminModal.tsx) is not gated on `isAdmin`.** Anyone can open
   it from the badge gate while signed out via "Enroll badge (supervisor)" or "Open Admin to
@@ -226,12 +227,13 @@ the station. The station polls that folder and offers anything it has not import
 path is set under Admin → Settings (`lvs-drop-folder`; empty turns it off and import goes back
 to the file picker).
 
-**Finding a file is automatic; importing it is not.** The banner leads to the same mapping →
-preview → confirm path a hand-picked file goes through, because the batch log is what operators
-check labels against and nothing should appear there that nobody chose to put there. The only
-concession is that an auto-found file **skips the mapping step when a saved mapping already
-covers it** — the useful question about an export that arrived on its own is "are these the
-right rows", not "which column is the batch number".
+**Finding a file is automatic; importing it is not.** The banner and the file picker both land
+on the preview, because the batch log is what operators check labels against and nothing should
+appear there that nobody chose to put there. Column mapping is not part of that path.
+`mappingForHeaders` uses the saved layout whenever its batch column is still in the file, so
+the usual D365 export previews the same way every time. Mapping opens only when the batch
+column cannot be found, or when someone presses **Edit column mapping** because the preview
+looks wrong. Confirming an import saves that layout.
 
 ### Why there are two Rust commands and not the `fs` plugin
 

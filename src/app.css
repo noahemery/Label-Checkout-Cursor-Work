@@ -453,6 +453,10 @@ body {
   height: 100%;
   max-height: 100%;
   overflow-y: auto;
+  background: var(--panel);
+  border: 3px solid var(--amber);
+  border-radius: var(--zone-radius);
+  box-shadow: 0 0 0 4px rgba(var(--amber-rgb), 0.22);
 }
 
 .checkout-rail .verification-embedded {
@@ -597,6 +601,36 @@ body {
 
 .scan-zone-head {
   padding: 1rem 1.25rem 0;
+}
+
+.checkout-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.55rem 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.checkout-guide li {
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.checkout-guide li.is-current {
+  color: #fff;
+  background: var(--amber);
+  border-color: var(--amber);
+}
+
+.checkout-guide li.is-done {
+  color: var(--green);
+  border-color: rgba(40, 199, 106, 0.45);
 }
 
 /* Holds the step checklist. It takes whatever height the rail has left over
@@ -779,27 +813,26 @@ body {
   position: relative;
   display: flex;
   align-items: center;
-  margin-top: 0.45rem;
-  min-width: 18rem;
-  max-width: 26rem;
+  margin: 0.85rem 1.25rem 0.35rem;
 }
 
 .queue-search-icon {
   position: absolute;
-  left: 0.55rem;
-  font-size: 0.8rem;
-  opacity: 0.65;
+  left: 0.85rem;
+  font-size: 1.05rem;
+  opacity: 0.85;
   pointer-events: none;
 }
 
 .queue-search-input {
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 1.05rem;
+  font-weight: 600;
   width: 100%;
-  padding: 0.4rem 1.9rem 0.4rem 1.9rem;
-  border: 1px solid var(--line-bright);
-  border-radius: 999px;
-  background: var(--panel-2);
+  padding: 0.7rem 2.4rem 0.7rem 2.5rem;
+  border: 2px solid var(--line-bright);
+  border-radius: 10px;
+  background: var(--panel-elevated);
   color: var(--text);
 }
 
@@ -815,7 +848,9 @@ body {
 
 .queue-search-clear {
   position: absolute;
-  right: 0.35rem;
+  top: 50%;
+  right: 0.55rem;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2302,8 +2337,31 @@ body {
 }
 
 .queue-batch {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   font-weight: 800;
   font-size: 1.05rem;
+  white-space: nowrap;
+}
+
+/* Same width as the expand button and the PARENT tag, so a one-label order's
+   batch number starts where a split family's number starts. */
+.queue-expand-spacer,
+.queue-roll-slot {
+  flex: 0 0 auto;
+}
+
+.queue-expand-spacer {
+  width: 1.75rem;
+}
+
+.queue-roll-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 4.75rem;
+  box-sizing: border-box;
 }
 
 .queue-product {
@@ -2971,9 +3029,9 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  margin-right: 0.35rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-right: 0;
   padding: 0;
   border: none;
   border-radius: 6px;

@@ -90,6 +90,13 @@ export function VerificationPanel({
     >
       <header className="scan-zone-head">
         <span className="zone-tag">Checkout</span>
+        <ol className="checkout-guide">
+          <li className={!fam ? 'is-current' : 'is-done'}>1. Pick the order</li>
+          <li className={isScanning ? 'is-current' : isComplete ? 'is-done' : ''}>
+            2. Scan each label
+          </li>
+          <li className={isComplete ? 'is-current' : ''}>3. Badge to finish</li>
+        </ol>
         <h2 className="zone-title">{head.title}</h2>
         <p className="zone-desc">{head.desc}</p>
       </header>

@@ -67,7 +67,7 @@ function familyMatchesSearch(family: BatchFamilyGroup, query: string): boolean {
 function rollPill(batch: Batch, isParentRow: boolean) {
   const suffix = splitSuffix(batch.batchNumber);
   if (isParentRow && !suffix) {
-    return <span className="roll-pill roll-parent">PARENT</span>;
+    return <span className="roll-pill roll-parent queue-roll-slot">PARENT</span>;
   }
   if (suffix) {
     return <span className="roll-pill roll-split">-{suffix}</span>;
@@ -187,10 +187,9 @@ export function BatchQueue({
     const isCurrentMember = batch.id === activeMemberBatchId;
 
     const statusClass = isParentHeader ? familyStatusClass(familyMembers) : batch.status;
+    // A one-label order is still an order: "0/1 done", same as a split family.
     const statusText = isParentHeader
-      ? hasChildren
-        ? familyStatusLabel(familyMembers)
-        : STATUS_LABEL[batch.status]
+      ? familyStatusLabel(familyMembers.length > 0 ? familyMembers : [batch])
       : STATUS_LABEL[batch.status];
 
     const rowClass = [
@@ -226,22 +225,29 @@ export function BatchQueue({
           </span>
         </td>
         <td className={`queue-batch${isChild ? ' queue-batch-child' : ''}`}>
-          {isParentHeader && hasChildren && (
-            <button
-              type="button"
-              className="queue-expand-btn"
-              aria-expanded={expanded}
-              aria-label={expanded ? 'Collapse child batches' : 'Expand child batches'}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleFamily(batch.id);
-              }}
-            >
-              {expanded ? '▼' : '▶'}
-            </button>
-          )}
+          {isParentHeader &&
+            (hasChildren ? (
+              <button
+                type="button"
+                className="queue-expand-btn"
+                aria-expanded={expanded}
+                aria-label={expanded ? 'Collapse child batches' : 'Expand child batches'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFamily(batch.id);
+                }}
+              >
+                {expanded ? '▼' : '▶'}
+              </button>
+            ) : (
+              <span className="queue-expand-spacer" aria-hidden />
+            ))}
           {isChild && <span className="queue-indent" aria-hidden />}
-          {rollPill(batch, isParentHeader && hasChildren)}
+          {isParentHeader && !hasChildren ? (
+            <span className="queue-roll-slot" aria-hidden />
+          ) : (
+            rollPill(batch, isParentHeader && hasChildren)
+          )}
           <span className="queue-batch-number">{batch.batchNumber}</span>
           {isParentHeader && isFamilyActive && orderPhase && (
             <span className={`queue-order-pill queue-order-pill-${orderPhase}`}>
@@ -278,31 +284,6 @@ export function BatchQueue({
         <div className="queue-header-left">
           <span className="zone-tag">Batch log</span>
           <h2 className="zone-title">Today&rsquo;s orders</h2>
-          <div className="queue-search">
-            <span className="queue-search-icon" aria-hidden>
-              🔍
-            </span>
-            <input
-              ref={searchRef}
-              type="text"
-              className="queue-search-input"
-              placeholder="Search batch, product, item or label"
-              aria-label="Search today's orders"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={onSearchKeyDown}
-            />
-            {searching && (
-              <button
-                type="button"
-                className="queue-search-clear"
-                onClick={clearSearch}
-                aria-label="Clear search"
-              >
-                ✕
-              </button>
-            )}
-          </div>
         </div>
         <div className="queue-header-right">
           <div className="queue-progress-summary">
@@ -338,6 +319,34 @@ export function BatchQueue({
       {isAdmin && (
         <div className="upload-zone">
           <D365UploadPanel onOpenTestLabels={onOpenTestLabels} />
+        </div>
+      )}
+
+      {(pageBatches.length > 0 || searching) && (
+        <div className="queue-search">
+          <span className="queue-search-icon" aria-hidden>
+            🔍
+          </span>
+          <input
+            ref={searchRef}
+            type="text"
+            className="queue-search-input"
+            placeholder="Search batch number"
+            aria-label="Search today's orders by batch number"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={onSearchKeyDown}
+          />
+          {searching && (
+            <button
+              type="button"
+              className="queue-search-clear"
+              onClick={clearSearch}
+              aria-label="Clear search"
+            >
+              ✕
+            </button>
+          )}
         </div>
       )}
 

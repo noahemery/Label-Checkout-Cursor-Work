@@ -5,8 +5,8 @@ import {
   CSV_FIELD_LABELS,
   CSV_REQUIRED,
   analyzeCsvWithMapping,
-  autoDetectMapping,
   loadSavedColumnMapping,
+  mappingForHeaders,
   saveColumnMapping,
   peekCsvHeaders,
   type ColumnMapping,
@@ -77,6 +77,8 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<ImportFeedback | null>(null);
+  /** Saved layout did not match this file, so columns were guessed. */
+  const [layoutGuessed, setLayoutGuessed] = useState(false);
 
   useEffect(() => {
     try {
@@ -94,19 +96,18 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
     setPendingFile(null);
     setHeaders([]);
     setError(null);
+    setLayoutGuessed(false);
   };
 
   /**
-   * `straightToPreview` is for files the station found by itself. The person
-   * still confirms the import, but they should not have to re-approve a column
-   * mapping that was already saved — the useful question about an export that
-   * arrived on its own is "are these the right rows", not "which column is the
-   * batch number".
+   * The usual export goes straight to the preview. Column mapping opens only
+   * when the batch column cannot be found, or when someone asks to edit it.
    */
-  const beginImportFile = (file: File, opts?: { straightToPreview?: boolean }) => {
+  const beginImportFile = (file: File) => {
     setError(null);
     setAnalysis(null);
-    setStep('mapping');
+    setLayoutGuessed(false);
+    setStep('preview');
     setBusy(true);
     void (async () => {
       try {
@@ -115,19 +116,26 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
           setError(errors[0] ?? 'Could not read column headers from that file.');
           return;
         }
-        const merged = { ...loadSavedColumnMapping(), ...autoDetectMapping(h) };
+        const saved = loadSavedColumnMapping();
+        const resolved = mappingForHeaders(h, saved);
         setHeaders(h);
-        setMapping(merged);
+        setMapping(resolved.mapping);
         setPendingFile(file);
         setImportOpen(true);
 
-        if (!opts?.straightToPreview || !merged.batchNumber) return;
+        if (resolved.source === 'unmapped') {
+          setStep('mapping');
+          setError('This file does not match the usual export. Match the columns below, then review.');
+          return;
+        }
 
-        const result = await analyzeCsvWithMapping(file, merged);
+        const result = await analyzeCsvWithMapping(file, resolved.mapping);
         if (result.rows.length === 0) {
+          setStep('mapping');
           setError(result.parseErrors[0] ?? 'No batch rows found in file.');
           return;
         }
+        setLayoutGuessed(resolved.source === 'detected' && Boolean(saved.batchNumber));
         setAnalysis(result);
         setStep('preview');
       } catch (err) {
@@ -173,9 +181,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
         // from the shared folder is wrapped as one. A file that arrived on its
         // own then goes through exactly the same parse, preview and confirm as
         // one somebody picked by hand.
-        beginImportFile(new File([text], name, { type: 'text/csv' }), {
-          straightToPreview: true,
-        });
+        beginImportFile(new File([text], name, { type: 'text/csv' }));
       })
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : 'Could not read that file.');
@@ -316,8 +322,8 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
         <div className="zone-head-text">
           <h3 className="zone-title">D365 batch data</h3>
           <p className="zone-desc">
-            Upload today&rsquo;s print run export (.csv) from Dynamics 365, or load the bundled
-            sample to walk through mapping and preview.
+            Upload today&rsquo;s print run export (.csv) from Dynamics 365. The usual layout
+            opens straight on a preview.
           </p>
         </div>
 
@@ -406,10 +412,11 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
           {step === 'mapping' && (
             <>
               <p className="d365-mapping-hint">
-                Match your D365 export columns to app fields. For the standard Dynamics export,
-                <strong> Production</strong> → Batch, <strong>Label</strong> → Label code,{' '}
-                <strong>Split</strong> → per-run size (blank = one run),{' '}
-                <strong>Delivery</strong> → delivery date (not expiration).
+                Use this when the export layout changed or the preview looks wrong. For the
+                standard Dynamics export, <strong>Production</strong> → Batch,{' '}
+                <strong>Label</strong> → Label code, <strong>Split</strong> → per-run size
+                (blank = one run), <strong>Delivery</strong> → delivery date (not expiration).
+                Confirming an import saves this layout for next time.
               </p>
               <table className="d365-mapping-table">
                 <thead>
@@ -460,6 +467,13 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
 
           {step === 'preview' && analysis && (
             <>
+              {layoutGuessed && (
+                <p className="d365-mapping-hint">
+                  This file does not match the saved column layout, so columns were guessed.
+                  Check the preview, or edit column mapping if a field landed in the wrong place.
+                </p>
+              )}
+
               <div className="d365-preview-summary">
                 <span>
                   <strong>{analysis.stats.sourceOrders}</strong> order
@@ -579,9 +593,12 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
                 <button
                   type="button"
                   className="btn btn-ghost"
-                  onClick={() => setStep('mapping')}
+                  onClick={() => {
+                    setLayoutGuessed(false);
+                    setStep('mapping');
+                  }}
                 >
-                  Back to mapping
+                  Edit column mapping
                 </button>
                 <button
                   type="button"

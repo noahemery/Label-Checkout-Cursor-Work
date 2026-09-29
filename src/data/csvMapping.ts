@@ -76,6 +76,36 @@ function normalizeHeader(header: string): string {
   return header.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+export type MappingSource = 'saved' | 'detected' | 'unmapped';
+
+/**
+ * Pick the column layout for a file.
+ *
+ * A saved mapping is the station's usual D365 export. It wins whenever its
+ * batch column is still in the file, so the same spreadsheet imports the same
+ * way every time. Auto-detect is the fallback for a first import or a file
+ * whose headers no longer match. `unmapped` means even the batch column could
+ * not be found — that is the only case that has to open the mapping screen.
+ */
+export function mappingForHeaders(
+  headers: string[],
+  saved: ColumnMapping,
+): { mapping: ColumnMapping; source: MappingSource } {
+  const present = new Set(headers);
+  if (saved.batchNumber && present.has(saved.batchNumber)) {
+    const mapping: ColumnMapping = {};
+    for (const field of Object.keys(CSV_FIELD_LABELS) as CsvField[]) {
+      const header = saved[field];
+      if (header && present.has(header)) mapping[field] = header;
+    }
+    return { mapping, source: 'saved' };
+  }
+
+  const detected = autoDetectMapping(headers);
+  if (detected.batchNumber) return { mapping: detected, source: 'detected' };
+  return { mapping: detected, source: 'unmapped' };
+}
+
 export function autoDetectMapping(headers: string[]): ColumnMapping {
   const mapping: ColumnMapping = {};
   for (const header of headers) {
