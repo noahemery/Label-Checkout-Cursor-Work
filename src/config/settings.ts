@@ -10,6 +10,8 @@ export interface AppSettings {
   /** Idle time before auto sign-out while signed in (ms). Admin-adjustable. */
   sessionTimeoutMs: number;
   soundEnabled: boolean;
+  /** Soft tone on idle timeout or badge sign-out. Off at launch. */
+  signOutSoundEnabled: boolean;
 }
 
 /** Slider range for session timeout (minutes). */
@@ -37,6 +39,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoAdvanceMs: 2500,
   sessionTimeoutMs: minutesToSessionTimeout(SESSION_TIMEOUT_DEFAULT_MINUTES),
   soundEnabled: true,
+  signOutSoundEnabled: false,
 };
 
 export const SETTINGS_STORAGE_KEY = 'lvs-settings';

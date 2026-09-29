@@ -298,8 +298,8 @@ function BatchesTab({ onOpenTestLabels }: { onOpenTestLabels?: () => void }) {
         Batches on {activePage.referenceNumber} ({pageBatches.length})
       </h3>
       <p className="admin-hint">
-        Only batches in the current print run are listed. To wipe the whole run, use{' '}
-        <strong>Clear run</strong> in the import panel.
+        Only batches from CSVs currently marked active are listed. Hide a sheet from
+        the D365 panel — the rows stay in the database.
       </p>
       <div className="admin-list">
         {pageBatches.map((b) => (
@@ -841,6 +841,17 @@ function SettingsTab() {
             onChange={(e) => updateSettings({ soundEnabled: e.target.checked })}
           />
           Sounds on verify / mismatch
+        </label>
+        <label className="admin-check">
+          <input
+            type="checkbox"
+            checked={settings.signOutSoundEnabled}
+            onChange={(e) => updateSettings({ signOutSoundEnabled: e.target.checked })}
+          />
+          Sound on sign-out / idle timeout
+          <span className="admin-hint">
+            Off by default. Does not play when the app starts.
+          </span>
         </label>
       </div>
     </div>

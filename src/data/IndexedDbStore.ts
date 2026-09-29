@@ -34,7 +34,7 @@ export class IndexedDbStore implements DataStore {
   private dbPromise: Promise<IDBPDatabase<LvsDb>>;
 
   constructor() {
-    this.dbPromise = openDB<LvsDb>('label-verification', 10, {
+    this.dbPromise = openDB<LvsDb>('label-verification', 11, {
       async upgrade(db, oldVersion, _newVersion, transaction) {
         if (oldVersion < 1) {
           const batches = db.createObjectStore('batches', { keyPath: 'id' });
@@ -123,6 +123,15 @@ export class IndexedDbStore implements DataStore {
             }
           }
         }
+        if (oldVersion < 11 && db.objectStoreNames.contains('importSessions')) {
+          const sessions = transaction.objectStore('importSessions');
+          const all = await sessions.getAll();
+          for (const session of all) {
+            if (session.active === undefined) {
+              await sessions.put({ ...session, active: true });
+            }
+          }
+        }
       },
     });
   }
@@ -189,6 +198,7 @@ export class IndexedDbStore implements DataStore {
       filename: meta?.filename ?? 'import.csv',
       importedAt: nowIso(),
       labelCount: 0,
+      active: true,
     };
 
     let added = 0;
@@ -220,13 +230,24 @@ export class IndexedDbStore implements DataStore {
   async getImportSessions(): Promise<ImportSession[]> {
     const db = await this.dbPromise;
     const all = await db.getAll('importSessions');
-    return all.sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+    return all
+      .map((s) => ({ ...s, active: s.active !== false }))
+      .sort((a, b) => b.importedAt.localeCompare(a.importedAt));
   }
 
   async getImportSessionsForPage(pageId: string): Promise<ImportSession[]> {
     const db = await this.dbPromise;
     const all = await db.getAllFromIndex('importSessions', 'byPageId', pageId);
-    return all.sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+    return all
+      .map((s) => ({ ...s, active: s.active !== false }))
+      .sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+  }
+
+  async setImportSessionActive(importId: string, active: boolean): Promise<void> {
+    const db = await this.dbPromise;
+    const session = await db.get('importSessions', importId);
+    if (!session) throw new Error(`Import session ${importId} not found`);
+    await db.put('importSessions', { ...session, active });
   }
 
   private async updateBatch(batchId: string, patch: Partial<Batch>): Promise<Batch> {

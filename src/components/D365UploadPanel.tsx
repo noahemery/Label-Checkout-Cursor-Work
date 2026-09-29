@@ -61,8 +61,8 @@ const SAMPLE_EXPORT_URL = '/sample-d365-export.csv';
 const SAMPLE_EXPORT_NAME = 'sample-d365-export.csv';
 
 export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () => void }) {
-  const { store, refreshBatches, refreshImportSessions, logAudit } = useAppData();
-  const { activePageId, clearPrintRun, pageBatches } = useSheetPage();
+  const { store, importSessions, refreshBatches, refreshImportSessions, logAudit } = useAppData();
+  const { activePageId, pageBatches, setImportActive } = useSheetPage();
   const { operator } = useSession();
   const dropFolder = useDropFolder();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -74,7 +74,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
   const [step, setStep] = useState<ImportStep>('mapping');
   const [analysis, setAnalysis] = useState<CsvImportAnalysis | null>(null);
   const [busy, setBusy] = useState(false);
-  const [clearing, setClearing] = useState(false);
+  const [sheetsOpen, setSheetsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<ImportFeedback | null>(null);
   /** Saved layout did not match this file, so columns were guessed. */
@@ -261,23 +261,8 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
     })();
   };
 
-  const runClearRun = () => {
-    if (pageBatches.length === 0) return;
-    if (!window.confirm('Remove all batches from today\u2019s print run? This cannot be undone.')) {
-      return;
-    }
-    setClearing(true);
-    setError(null);
-    void clearPrintRun()
-      .then(() => {
-        setFeedback(null);
-        localStorage.removeItem(`lvs-d365-last-import-${activePageId}`);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Clear failed.');
-      })
-      .finally(() => setClearing(false));
-  };
+  const pageSessions = importSessions.filter((s) => s.pageId === activePageId);
+  const hiddenCount = pageSessions.filter((s) => s.active === false).length;
 
   const holdNote = dropFolder.scan ? describeHold(dropFolder.scan.held) : null;
 
@@ -298,7 +283,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
               <button
                 type="button"
                 className="btn btn-primary d365-upload-btn"
-                disabled={busy || clearing}
+                disabled={busy}
                 onClick={() => openFromDropFolder(file.name)}
               >
                 Review and import
@@ -328,16 +313,17 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
         </div>
 
         <div className="d365-upload-aside">
-          {(pageBatches.length > 0 || feedback) && (
+          {(pageSessions.length > 0 || feedback) && (
             <div className="d365-upload-row">
-              {pageBatches.length > 0 ? (
+              {pageSessions.length > 0 ? (
                 <button
                   type="button"
                   className="btn btn-ghost d365-upload-btn"
-                  disabled={busy || clearing}
-                  onClick={runClearRun}
+                  disabled={busy}
+                  onClick={() => setSheetsOpen((open) => !open)}
                 >
-                  {clearing ? 'Clearing…' : 'Clear run'}
+                  {sheetsOpen ? 'Hide sheets' : 'Active sheets'}
+                  {hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ''}
                 </button>
               ) : (
                 <span className="d365-upload-btn-spacer" aria-hidden />
@@ -357,7 +343,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
             <button
               type="button"
               className="btn btn-primary d365-upload-btn"
-              disabled={busy || clearing}
+              disabled={busy}
               onClick={loadSampleExport}
             >
               {busy ? 'Loading…' : 'Load sample export'}
@@ -365,7 +351,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
             <button
               type="button"
               className="btn btn-ghost d365-upload-btn"
-              disabled={busy || clearing}
+              disabled={busy}
               onClick={() => fileRef.current?.click()}
             >
               Choose your file…
@@ -374,7 +360,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
               <button
                 type="button"
                 className="btn btn-ghost d365-upload-btn"
-                disabled={busy || clearing}
+                disabled={busy}
                 onClick={onOpenTestLabels}
               >
                 Test labels
@@ -399,6 +385,36 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
           onChange={onFilePick}
         />
       </div>
+
+      {sheetsOpen && pageSessions.length > 0 && (
+        <div className="d365-sheets">
+          <p className="d365-sheets-hint">
+            Uncheck a file to take it off the live log. The labels, checkouts and audit
+            trail stay in the database.
+          </p>
+          <ul className="d365-sheets-list">
+            {pageSessions.map((session) => (
+              <li key={session.id} className="d365-sheets-row">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={session.active !== false}
+                    disabled={busy}
+                    onChange={() => void setImportActive(session.id, session.active === false)}
+                  />
+                  <span className="d365-sheets-name" title={session.filename}>
+                    {session.filename}
+                  </span>
+                  <span className="d365-sheets-meta">
+                    {session.labelCount} label{session.labelCount === 1 ? '' : 's'}
+                    {session.active === false ? ' · hidden' : ''}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {error && <div className="upload-error">{error}</div>}
 

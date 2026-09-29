@@ -52,6 +52,7 @@ interface ImportSessionRow {
   filename: string;
   imported_at: string;
   label_count: number;
+  active: number;
 }
 
 interface OperatorRow {
@@ -106,6 +107,7 @@ function toImportSession(r: ImportSessionRow): ImportSession {
     filename: r.filename,
     importedAt: r.imported_at,
     labelCount: r.label_count,
+    active: r.active !== 0,
   };
 }
 
@@ -209,6 +211,20 @@ export class SqliteStore implements DataStore {
     for (const statement of SCHEMA_STATEMENTS) {
       await db.execute(statement);
     }
+
+    const versionRows = await db.select<{ value: string }[]>(
+      `SELECT value FROM schema_meta WHERE key = 'schema_version' LIMIT 1`,
+    );
+    const fromVersion = Number(versionRows[0]?.value ?? '0');
+    if (fromVersion < 2) {
+      const cols = await db.select<{ name: string }[]>(`PRAGMA table_info(import_sessions)`);
+      if (!cols.some((c) => c.name === 'active')) {
+        await db.execute(
+          `ALTER TABLE import_sessions ADD COLUMN active INTEGER NOT NULL DEFAULT 1`,
+        );
+      }
+    }
+
     await db.execute(
       `INSERT INTO schema_meta (key, value) VALUES ('schema_version', $1)
          ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
@@ -277,8 +293,8 @@ export class SqliteStore implements DataStore {
   ): Promise<ImportResult> {
     const importId = newId();
     await this.db.execute(
-      `INSERT INTO import_sessions (id, page_id, filename, imported_at, label_count)
-         VALUES ($1, $2, $3, $4, 0)`,
+      `INSERT INTO import_sessions (id, page_id, filename, imported_at, label_count, active)
+         VALUES ($1, $2, $3, $4, 0, 1)`,
       [importId, pageId, meta?.filename ?? 'import.csv', nowIso()],
     );
 
@@ -312,7 +328,7 @@ export class SqliteStore implements DataStore {
 
   async getImportSessions(): Promise<ImportSession[]> {
     const rows = await this.db.select<ImportSessionRow[]>(
-      `SELECT id, page_id, filename, imported_at, label_count
+      `SELECT id, page_id, filename, imported_at, label_count, active
          FROM import_sessions ORDER BY imported_at DESC`,
     );
     return rows.map(toImportSession);
@@ -320,7 +336,7 @@ export class SqliteStore implements DataStore {
 
   async getImportSessionsForPage(pageId: string): Promise<ImportSession[]> {
     const rows = await this.db.select<ImportSessionRow[]>(
-      `SELECT id, page_id, filename, imported_at, label_count
+      `SELECT id, page_id, filename, imported_at, label_count, active
          FROM import_sessions WHERE page_id = $1 ORDER BY imported_at DESC`,
       [pageId],
     );
@@ -351,6 +367,13 @@ export class SqliteStore implements DataStore {
   async flagRow(batchId: string): Promise<Batch> {
     await this.db.execute(`UPDATE batches SET status = 'flagged' WHERE id = $1`, [batchId]);
     return this.getBatchById(batchId);
+  }
+
+  async setImportSessionActive(importId: string, active: boolean): Promise<void> {
+    await this.db.execute(`UPDATE import_sessions SET active = $1 WHERE id = $2`, [
+      active ? 1 : 0,
+      importId,
+    ]);
   }
 
   async deleteBatch(batchId: string): Promise<void> {

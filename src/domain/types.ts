@@ -53,6 +53,11 @@ export interface ImportSession {
   importedAt: string;
   /** Rows added during this import (snapshot at import time). */
   labelCount: number;
+  /**
+   * On the live batch log. False hides the CSV from operators without deleting
+   * the rows — checkouts, mismatches and the audit trail stay in SQLite.
+   */
+  active: boolean;
 }
 
 /** Badge-in profile — admins see full tools; operators get a minimal checkout screen. */
@@ -83,6 +88,8 @@ export type AuditType =
   | 'batch_add'
   | 'batch_delete'
   | 'csv_import'
+  | 'import_hidden'
+  | 'import_shown'
   | 'page_select'
   | 'sheet_photo'
   | 'sheet_reset';

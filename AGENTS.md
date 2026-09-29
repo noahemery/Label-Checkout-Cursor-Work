@@ -147,14 +147,16 @@ append-only, so this adds a note rather than rewriting history.
 ## Multi-CSV print run and mixed queue
 
 All batches live on one page id (`print-run` in [logSheetPages.ts](src/data/logSheetPages.ts)).
-Each D365 import creates an **import session** (`ImportSession` in IndexedDB store
-`importSessions`, schema v10) and stamps every row added that import with `batch.importId`.
+Each D365 import creates an **import session** (`ImportSession`, SQLite schema v2 /
+IndexedDB v11) and stamps every row added that import with `batch.importId`.
 
 - **Additive import:** `importBatches` skips duplicate batch numbers already on the page — the
   first sheet keeps the row; re-importing a corrected CSV does not update existing rows.
-- **Mixed queue:** pending, verified, and flagged labels from every import share one batch log.
-  Leftover unchecked labels from an earlier CSV stay until checked out or **Clear run** wipes
-  the whole print run (batches + import sessions).
+- **Active sheets:** each session has an `active` flag. Unchecking a file in the D365 panel
+  hides its rows from the live log. The batches, checkouts and audit trail stay in the
+  database. Rechecking the file puts them back.
+- **Mixed queue:** pending, verified, and flagged labels from every *active* import share one
+  batch log.
 - **Sheet column:** shows the source CSV filename (truncated; full name in tooltip).
 - **Delivery column:** D365 Delivery field, visible to operators; default sort is soonest
   delivery first (`lvs-queue-sort` in localStorage; alternate: sort by sheet / import time).
@@ -261,10 +263,10 @@ mean granting a broad static scope. Two narrow commands are less machinery and a
 ### "Already imported" comes from `import_sessions`
 
 `scanDropFolder` ([dropFolder.ts](src/data/dropFolder.ts)) decides a file is new by comparing
-its name against the filenames on `import_sessions` — case- and whitespace-insensitive. There is
-no separate list of seen files, because that table is already the record of every CSV this
-station took in, it survives restarts, and **Clear run** wipes it, which is exactly when
-re-importing the same file should become possible again.
+its name against the filenames on `import_sessions` — case- and whitespace-insensitive. There
+is no separate list of seen files, because that table is already the record of every CSV this
+station took in. Hiding a sheet does **not** forget the filename, so the same file is not
+offered again.
 
 The consequence: **a corrected export has to be saved under a new name.** Re-saving
 `print-run.csv` with fixed rows looks like a file that was already handled. That matches
@@ -312,8 +314,9 @@ import the same file back; the summary should say every badge already matched.
 For the watched folder, point Admin → Settings at any local folder and drop a CSV in. **Save
 folder** lists it immediately and reports how many CSVs it can see, so a typo in the path shows
 up as "Cannot read that folder" rather than as silence. The banner appears within one poll plus
-the settling window — allow about a minute. Import it, and it must stop being offered; press
-**Clear run** and it must come back.
+the settling window — allow about a minute. Import it, and it must stop being offered. Hiding
+the sheet takes it off the log; the filename stays recorded, so the same file is not offered
+again.
 
 ## Conventions
 
@@ -322,8 +325,9 @@ the settling window — allow about a minute. Import it, and it must stop being 
   and audit in IndexedDB (`label-verification`). Desktop stores those plus settings in
   SQLite (`label-verification.db` under the app config dir). Settings are dual-written
   so a first desktop launch can pick up values already in `localStorage`.
-- Sounds are gated on `settings.soundEnabled` **at each call site** —
-  [sounds.ts](src/audio/sounds.ts) has no internal gate, so a new call site must check it itself.
+- Sounds are gated at each call site — [sounds.ts](src/audio/sounds.ts) has no internal gate.
+  Verify and mismatch use `soundEnabled`. Sign-out uses `signOutSoundEnabled`, which defaults
+  to off and never plays on launch.
 - Tunable thresholds live in [settings.ts:13-20](src/config/settings.ts#L13-L20) and are editable
   at runtime under Admin → Settings: `badgePattern` (default `^\d{5,14}$` — 5-digit Alltech prox
   badges), `burstGapMs` (40), `commitPauseMs` (250), `autoAdvanceMs` (2500, now inert).

@@ -59,6 +59,8 @@ export interface DataStore {
   importBatches(pageId: string, inputs: BatchInput[], meta?: ImportMeta): Promise<ImportResult>;
   getImportSessions(): Promise<ImportSession[]>;
   getImportSessionsForPage(pageId: string): Promise<ImportSession[]>;
+  /** Hide or show a CSV on the live log. Rows stay in the database. */
+  setImportSessionActive(importId: string, active: boolean): Promise<void>;
   verifyRow(batchId: string, operator: Operator): Promise<Batch>;
   reopenRow(batchId: string): Promise<Batch>;
   flagRow(batchId: string): Promise<Batch>;
