@@ -44,7 +44,7 @@ export type OrderBadgeResult =
  *
  * 1. Operator clicks an order in the batch log — it opens immediately
  *    (`scanning`) on its first member.
- * 2. Each member is checked by its printed `LBL|` QR alone, compared against
+ * 2. Each member is checked by its printed label QR alone, compared against
  *    the D365 record for that member. A mismatch is recorded and the order
  *    still advances, so the operator can get the rest of the run out.
  * 3. When every member has been scanned the order holds at `complete`.
@@ -164,6 +164,14 @@ export function useVerification(
     setRecheckPrompt(null);
     update(freshState());
   }, [update]);
+
+  // Labels can disappear while an order is open (sheet removed, or hidden).
+  // Drop the in-memory checkout so we cannot badge-confirm rows that are gone.
+  useEffect(() => {
+    if (!familyCheckout) return;
+    const missing = familyCheckout.memberBatchIds.some((id) => !pageBatches.some((b) => b.id === id));
+    if (missing) reset();
+  }, [familyCheckout, pageBatches, reset]);
 
   const sound = useCallback(
     (kind: 'success' | 'error' | 'blip') => {

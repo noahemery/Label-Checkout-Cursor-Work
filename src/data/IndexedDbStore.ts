@@ -4,7 +4,14 @@ import { normalizeId } from '../domain/normalize';
 import { buildReferenceQrPayload } from '../domain/referenceQr';
 import { newId, nowIso } from '../domain/types';
 import type { AuditEvent, Batch, ImportSession, Operator, UserRole } from '../domain/types';
-import type { AuditInput, BatchInput, DataStore, ImportMeta, ImportResult } from './DataStore';
+import type {
+  AuditInput,
+  BatchInput,
+  DataStore,
+  DeleteImportResult,
+  ImportMeta,
+  ImportResult,
+} from './DataStore';
 import type { RosterImportResult } from './roster';
 
 interface LvsDb extends DBSchema {
@@ -248,6 +255,23 @@ export class IndexedDbStore implements DataStore {
     const session = await db.get('importSessions', importId);
     if (!session) throw new Error(`Import session ${importId} not found`);
     await db.put('importSessions', { ...session, active });
+  }
+
+  async deleteImportSession(importId: string): Promise<DeleteImportResult> {
+    const db = await this.dbPromise;
+    const session = await db.get('importSessions', importId);
+    if (!session) throw new Error(`Import session ${importId} not found`);
+
+    const onPage = await db.getAll('batches');
+    let deleted = 0;
+    for (const batch of onPage) {
+      if (batch.importId === importId) {
+        await db.delete('batches', batch.id);
+        deleted++;
+      }
+    }
+    await db.delete('importSessions', importId);
+    return { filename: session.filename, deleted };
   }
 
   private async updateBatch(batchId: string, patch: Partial<Batch>): Promise<Batch> {

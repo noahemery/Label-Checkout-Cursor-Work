@@ -9,6 +9,7 @@ import {
 import type { ReactNode } from 'react';
 import type { Batch } from '../domain/types';
 import { useAppData } from './AppDataContext';
+import type { DeleteImportResult } from './DataStore';
 import type { LogSheetPageDef } from './logSheetPages';
 import { LEGACY_SHEET_PAGE_IDS, PRINT_RUN_PAGE, PRINT_RUN_PAGE_ID } from './logSheetPages';
 
@@ -18,6 +19,8 @@ interface SheetPageContextValue {
   /** Batches from CSVs currently marked active on the live log. */
   pageBatches: Batch[];
   setImportActive: (importId: string, active: boolean) => Promise<void>;
+  /** Remove a CSV from this station so its labels leave the log and it can be imported again. */
+  deleteImportedSheet: (importId: string) => Promise<DeleteImportResult>;
   loading: boolean;
 }
 
@@ -64,6 +67,24 @@ export function SheetPageProvider({ children }: { children: ReactNode }) {
     [store, importSessions, refreshImportSessions, logAudit],
   );
 
+  const deleteImportedSheet = useCallback(
+    async (importId: string) => {
+      const session = importSessions.find((s) => s.id === importId);
+      const result = await store.deleteImportSession(importId);
+      await refreshBatches();
+      await refreshImportSessions();
+      await logAudit({
+        type: 'import_deleted',
+        operatorId: null,
+        operatorName: null,
+        batchNumber: null,
+        detail: `Removed "${session?.filename ?? result.filename}" from the station — ${result.deleted} label${result.deleted === 1 ? '' : 's'} deleted. Audit trail kept.`,
+      });
+      return result;
+    },
+    [store, importSessions, refreshBatches, refreshImportSessions, logAudit],
+  );
+
   useEffect(() => {
     void (async () => {
       const MIGRATE = 'lvs-print-run-v2';
@@ -91,9 +112,10 @@ export function SheetPageProvider({ children }: { children: ReactNode }) {
       activePageId: PRINT_RUN_PAGE_ID,
       pageBatches,
       setImportActive,
+      deleteImportedSheet,
       loading,
     }),
-    [pageBatches, setImportActive, loading],
+    [pageBatches, setImportActive, deleteImportedSheet, loading],
   );
 
   return <SheetPageContext.Provider value={value}>{children}</SheetPageContext.Provider>;

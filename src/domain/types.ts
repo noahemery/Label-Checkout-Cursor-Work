@@ -56,6 +56,8 @@ export interface ImportSession {
   /**
    * On the live batch log. False hides the CSV from operators without deleting
    * the rows — checkouts, mismatches and the audit trail stay in SQLite.
+   * Removing the session (D365 panel → Remove) deletes the rows; the audit
+   * trail still stays.
    */
   active: boolean;
 }
@@ -90,6 +92,7 @@ export type AuditType =
   | 'csv_import'
   | 'import_hidden'
   | 'import_shown'
+  | 'import_deleted'
   | 'page_select'
   | 'sheet_photo'
   | 'sheet_reset';

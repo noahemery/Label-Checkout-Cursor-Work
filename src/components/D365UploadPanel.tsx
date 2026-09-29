@@ -61,8 +61,9 @@ const SAMPLE_EXPORT_URL = '/sample-d365-export.csv';
 const SAMPLE_EXPORT_NAME = 'sample-d365-export.csv';
 
 export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () => void }) {
-  const { store, importSessions, refreshBatches, refreshImportSessions, logAudit } = useAppData();
-  const { activePageId, pageBatches, setImportActive } = useSheetPage();
+  const { store, batches, importSessions, refreshBatches, refreshImportSessions, logAudit } =
+    useAppData();
+  const { activePageId, pageBatches, setImportActive, deleteImportedSheet } = useSheetPage();
   const { operator } = useSession();
   const dropFolder = useDropFolder();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -75,6 +76,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
   const [analysis, setAnalysis] = useState<CsvImportAnalysis | null>(null);
   const [busy, setBusy] = useState(false);
   const [sheetsOpen, setSheetsOpen] = useState(false);
+  const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<ImportFeedback | null>(null);
   /** Saved layout did not match this file, so columns were guessed. */
@@ -264,6 +266,28 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
   const pageSessions = importSessions.filter((s) => s.pageId === activePageId);
   const hiddenCount = pageSessions.filter((s) => s.active === false).length;
 
+  const confirmRemoveSheet = (importId: string) => {
+    setError(null);
+    setBusy(true);
+    void (async () => {
+      try {
+        const result = await deleteImportedSheet(importId);
+        if (
+          feedback &&
+          feedback.filename.trim().toLowerCase() === result.filename.trim().toLowerCase()
+        ) {
+          setFeedback(null);
+          localStorage.removeItem(`lvs-d365-last-import-${activePageId}`);
+        }
+        setPendingRemoveId(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Could not remove that file.');
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
   const holdNote = dropFolder.scan ? describeHold(dropFolder.scan.held) : null;
 
   return (
@@ -320,7 +344,10 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
                   type="button"
                   className="btn btn-ghost d365-upload-btn"
                   disabled={busy}
-                  onClick={() => setSheetsOpen((open) => !open)}
+                  onClick={() => {
+                    setPendingRemoveId(null);
+                    setSheetsOpen((open) => !open);
+                  }}
                 >
                   {sheetsOpen ? 'Hide sheets' : 'Active sheets'}
                   {hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ''}
@@ -389,29 +416,75 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
       {sheetsOpen && pageSessions.length > 0 && (
         <div className="d365-sheets">
           <p className="d365-sheets-hint">
-            Uncheck a file to take it off the live log. The labels, checkouts and audit
-            trail stay in the database.
+            Uncheck a file to hide it from the live log — labels and checkouts stay. Remove
+            deletes it from this station so you can import that filename again. The audit
+            trail is kept either way.
           </p>
           <ul className="d365-sheets-list">
-            {pageSessions.map((session) => (
-              <li key={session.id} className="d365-sheets-row">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={session.active !== false}
-                    disabled={busy}
-                    onChange={() => void setImportActive(session.id, session.active === false)}
-                  />
-                  <span className="d365-sheets-name" title={session.filename}>
-                    {session.filename}
-                  </span>
-                  <span className="d365-sheets-meta">
-                    {session.labelCount} label{session.labelCount === 1 ? '' : 's'}
-                    {session.active === false ? ' · hidden' : ''}
-                  </span>
-                </label>
-              </li>
-            ))}
+            {pageSessions.map((session) => {
+              const sheetBatches = batches.filter((b) => b.importId === session.id);
+              const liveCount = sheetBatches.length;
+              const checkedOut = sheetBatches.filter((b) => b.status !== 'pending').length;
+              const confirming = pendingRemoveId === session.id;
+              return (
+                <li key={session.id} className="d365-sheets-row">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={session.active !== false}
+                      disabled={busy || confirming}
+                      onChange={() => void setImportActive(session.id, session.active === false)}
+                    />
+                    <span className="d365-sheets-name" title={session.filename}>
+                      {session.filename}
+                    </span>
+                    <span className="d365-sheets-meta">
+                      {liveCount} label{liveCount === 1 ? '' : 's'}
+                      {session.active === false ? ' · hidden' : ''}
+                    </span>
+                  </label>
+                  {confirming ? (
+                    <div className="d365-sheets-confirm">
+                      <p>
+                        Remove <strong>{session.filename}</strong> from this station?{' '}
+                        {liveCount} label{liveCount === 1 ? '' : 's'} leave the log
+                        {checkedOut > 0
+                          ? ` (${checkedOut} already checked out)`
+                          : ''}
+                        . You can import this file again.
+                      </p>
+                      <div className="d365-sheets-confirm-actions">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={busy}
+                          onClick={() => setPendingRemoveId(null)}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-sm"
+                          disabled={busy}
+                          onClick={() => confirmRemoveSheet(session.id)}
+                        >
+                          {busy ? 'Removing…' : 'Remove file'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm d365-sheets-remove"
+                      disabled={busy || pendingRemoveId !== null}
+                      onClick={() => setPendingRemoveId(session.id)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

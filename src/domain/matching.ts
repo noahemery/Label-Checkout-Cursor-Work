@@ -4,7 +4,7 @@ import { normalizeId } from './normalize';
  * One side of a label comparison.
  *
  * The two sides are:
- *   label    — read off the physical printed label (`LBL|` QR, or hand-typed)
+ *   label    — read off the physical printed label (pipe QR, or hand-typed)
  *   expected — the D365 record for the member the order is currently on,
  *              built by `dbSideFromBatch` in ./familyCheckout
  *

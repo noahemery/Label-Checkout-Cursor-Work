@@ -54,7 +54,7 @@ The state machine lives in [useVerification.ts](src/verification/useVerification
 phases in [familyCheckout.ts](src/domain/familyCheckout.ts):
 
 - `scanning` — the operator clicked an order, so it is open on its first member. Each member is
-  checked by its printed `LBL|` QR alone, compared against the D365 record via `dbSideFromBatch`.
+  checked by its printed label QR alone, compared against the D365 record via `dbSideFromBatch`.
   A member that does not match is **recorded and the order advances anyway** — the rest of the
   run's labels still need to get out the door.
 - `complete` — every member has been scanned. The order holds here until a badge taps.
@@ -155,6 +155,9 @@ IndexedDB v11) and stamps every row added that import with `batch.importId`.
 - **Active sheets:** each session has an `active` flag. Unchecking a file in the D365 panel
   hides its rows from the live log. The batches, checkouts and audit trail stay in the
   database. Rechecking the file puts them back.
+- **Remove a sheet:** **Remove** on that same list deletes the import session and every batch
+  it added. Checkouts for those labels go with them. The audit trail is append-only and stays.
+  Forgetting the session is what lets the same filename be imported again.
 - **Mixed queue:** pending, verified, and flagged labels from every *active* import share one
   batch log.
 - **Sheet column:** shows the source CSV filename (truncated; full name in tooltip).
@@ -266,12 +269,14 @@ mean granting a broad static scope. Two narrow commands are less machinery and a
 its name against the filenames on `import_sessions` — case- and whitespace-insensitive. There
 is no separate list of seen files, because that table is already the record of every CSV this
 station took in. Hiding a sheet does **not** forget the filename, so the same file is not
-offered again.
+offered again. **Remove** does forget it, which is how you re-import a test file or a
+corrected export that kept the same name.
 
-The consequence: **a corrected export has to be saved under a new name.** Re-saving
-`print-run.csv` with fixed rows looks like a file that was already handled. That matches
-`importBatches` anyway, which skips batch numbers already on the page, so a same-name re-import
-would do nothing.
+The usual floor rule is unchanged: **a corrected export that you are keeping alongside the
+old one has to be saved under a new name.** Re-saving `print-run.csv` with fixed rows looks
+like a file that was already handled unless someone removed the earlier import first. That
+matches `importBatches` anyway, which skips batch numbers already on the page, so a
+same-name re-import would do nothing while those rows still exist.
 
 ### Where Graph slots in
 
@@ -293,16 +298,17 @@ There is no automated test runner. Floor-style testing uses the real control flo
 1. Import a D365 CSV (sample: **Load sample export** in the D365 panel, or choose your own file).
 2. Enroll a badge in Admin; sign in.
 3. Find the order with the **search bar** above the batch log, then click it — that opens it.
-4. For each member, scan a synthetic **LBL** QR from **Test labels** (Admin or D365 panel;
-   admin-only, hidden in operator preview), paste `LBL|1|batch|item|labelCode` into the wedge
-   input, or hand-type batch + label code (two Enter commits).
+4. For each member, scan a synthetic printed-label QR from **Test labels** (Admin or D365 panel;
+   admin-only, hidden in operator preview), paste `batch|item|product|labelCode|YYYY-MM-DD` into
+   the wedge input, or hand-type batch + label code (two Enter commits).
 5. Badge tap to confirm — with the badge of whoever is signed in.
 
-`buildLabelQrPayload` ([referenceQr.ts](src/domain/referenceQr.ts)) builds LBL strings from
-imported rows. Happy-path synthetic LBLs match the database by design; mismatch testing uses the
-"Mismatch test" QR in the Test labels drawer, which sends a label code of `WRONG` so the prefix
-check fails. Synthetic LBLs still require per-member scans in run order and a badge confirm —
-never auto-fill the scanned side from `dbSideFromBatch`.
+`buildLabelQrPayload` ([referenceQr.ts](src/domain/referenceQr.ts)) builds the live roll string
+from imported rows (`batch|item|name|labelCode|date`). Happy-path synthetic QRs match the
+database by design; mismatch testing uses the "Mismatch test" QR, which sends a label code of
+`WRONG` so the prefix check fails. Synthetic labels still require per-member scans in run order
+and a badge confirm — never auto-fill the scanned side from `dbSideFromBatch`. The parser still
+accepts legacy `LBL|1|batch|item|labelCode` so older test codes do not go silent.
 
 Backup and roster need the **desktop** build — `npm run dev` in a browser has no SQLite and no
 filesystem, so `snapshotTo` is undefined there and a backup reports "unsupported" by design.
@@ -316,7 +322,8 @@ folder** lists it immediately and reports how many CSVs it can see, so a typo in
 up as "Cannot read that folder" rather than as silence. The banner appears within one poll plus
 the settling window — allow about a minute. Import it, and it must stop being offered. Hiding
 the sheet takes it off the log; the filename stays recorded, so the same file is not offered
-again.
+again. **Remove** deletes the session and its labels; the same filename is offered again and a
+re-import can replace the log.
 
 ## Conventions
 

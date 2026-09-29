@@ -1133,12 +1133,44 @@ body {
   gap: 0.35rem;
 }
 
+.d365-sheets-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.55rem;
+  align-items: center;
+}
+
 .d365-sheets-row label {
   display: flex;
   align-items: center;
   gap: 0.55rem;
   min-width: 0;
   cursor: pointer;
+}
+
+.d365-sheets-remove {
+  flex-shrink: 0;
+}
+
+.d365-sheets-confirm {
+  grid-column: 1 / -1;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(232, 93, 93, 0.45);
+  border-radius: 6px;
+  background: rgba(232, 93, 93, 0.08);
+  color: var(--text);
+}
+
+.d365-sheets-confirm p {
+  margin: 0 0 0.45rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.d365-sheets-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
 }
 
 .d365-sheets-name {

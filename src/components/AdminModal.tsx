@@ -299,7 +299,8 @@ function BatchesTab({ onOpenTestLabels }: { onOpenTestLabels?: () => void }) {
       </h3>
       <p className="admin-hint">
         Only batches from CSVs currently marked active are listed. Hide a sheet from
-        the D365 panel — the rows stay in the database.
+        the D365 panel to take it off the log without deleting it, or Remove to
+        delete that file&rsquo;s labels from this station.
       </p>
       <div className="admin-list">
         {pageBatches.map((b) => (

@@ -3,7 +3,14 @@ import { normalizeId } from '../domain/normalize';
 import { buildReferenceQrPayload } from '../domain/referenceQr';
 import { newId, nowIso } from '../domain/types';
 import type { AuditEvent, Batch, ImportSession, Operator, UserRole } from '../domain/types';
-import type { AuditInput, BatchInput, DataStore, ImportMeta, ImportResult } from './DataStore';
+import type {
+  AuditInput,
+  BatchInput,
+  DataStore,
+  DeleteImportResult,
+  ImportMeta,
+  ImportResult,
+} from './DataStore';
 import type { RosterImportResult } from './roster';
 import { SCHEMA_STATEMENTS, SCHEMA_VERSION, WAL_PRAGMA } from './sqliteSchema';
 
@@ -374,6 +381,20 @@ export class SqliteStore implements DataStore {
       active ? 1 : 0,
       importId,
     ]);
+  }
+
+  async deleteImportSession(importId: string): Promise<DeleteImportResult> {
+    const sessions = await this.db.select<ImportSessionRow[]>(
+      `SELECT id, page_id, filename, imported_at, label_count, active
+         FROM import_sessions WHERE id = $1`,
+      [importId],
+    );
+    if (!sessions[0]) throw new Error(`Import session ${importId} not found`);
+
+    // Batches first so a failure cannot leave rows whose session is already gone.
+    const result = await this.db.execute(`DELETE FROM batches WHERE import_id = $1`, [importId]);
+    await this.db.execute(`DELETE FROM import_sessions WHERE id = $1`, [importId]);
+    return { filename: sessions[0].filename, deleted: result.rowsAffected };
   }
 
   async deleteBatch(batchId: string): Promise<void> {
