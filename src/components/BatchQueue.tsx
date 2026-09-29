@@ -67,7 +67,7 @@ function familyMatchesSearch(family: BatchFamilyGroup, query: string): boolean {
 function rollPill(batch: Batch, isParentRow: boolean) {
   const suffix = splitSuffix(batch.batchNumber);
   if (isParentRow && !suffix) {
-    return <span className="roll-pill roll-parent queue-roll-slot">PARENT</span>;
+    return <span className="roll-pill roll-parent">PARENT</span>;
   }
   if (suffix) {
     return <span className="roll-pill roll-split">-{suffix}</span>;
@@ -225,6 +225,7 @@ export function BatchQueue({
           </span>
         </td>
         <td className={`queue-batch${isChild ? ' queue-batch-child' : ''}`}>
+          <div className="queue-batch-line">
           {isParentHeader &&
             (hasChildren ? (
               <button
@@ -243,11 +244,12 @@ export function BatchQueue({
               <span className="queue-expand-spacer" aria-hidden />
             ))}
           {isChild && <span className="queue-indent" aria-hidden />}
-          {isParentHeader && !hasChildren ? (
-            <span className="queue-roll-slot" aria-hidden />
-          ) : (
-            rollPill(batch, isParentHeader && hasChildren)
+          {isParentHeader && (
+            <span className="queue-roll-slot">
+              {rollPill(batch, hasChildren)}
+            </span>
           )}
+          {!isParentHeader && rollPill(batch, false)}
           <span className="queue-batch-number">{batch.batchNumber}</span>
           {isParentHeader && isFamilyActive && orderPhase && (
             <span className={`queue-order-pill queue-order-pill-${orderPhase}`}>
@@ -257,6 +259,7 @@ export function BatchQueue({
           {isParentHeader && hasChildren && (
             <span className="queue-family-count">{familyMembers.length} labels</span>
           )}
+          </div>
         </td>
         <td className="queue-product">{batch.productName ?? ''}</td>
         <td>{batch.itemNumber ?? ''}</td>

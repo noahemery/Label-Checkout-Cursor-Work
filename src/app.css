@@ -2337,30 +2337,33 @@ body {
 }
 
 .queue-batch {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
   font-weight: 800;
   font-size: 1.05rem;
   white-space: nowrap;
 }
 
-/* Same width as the expand button and the PARENT tag, so a one-label order's
-   batch number starts where a split family's number starts. */
-.queue-expand-spacer,
-.queue-roll-slot {
-  flex: 0 0 auto;
+.queue-batch-line {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
 }
 
+/* Fixed tracks, not content width. An empty spacer with flex-basis auto
+   collapses to nothing, which is why one-label numbers sat too far left. */
+.queue-expand-btn,
 .queue-expand-spacer {
+  flex: 0 0 1.75rem;
   width: 1.75rem;
+  min-width: 1.75rem;
 }
 
 .queue-roll-slot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 4.75rem;
+  flex: 0 0 5.25rem;
+  width: 5.25rem;
+  min-width: 5.25rem;
   box-sizing: border-box;
 }
 
