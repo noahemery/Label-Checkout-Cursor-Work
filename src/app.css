@@ -2096,6 +2096,13 @@ body {
   color: var(--dim);
 }
 
+.manual-signin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+}
+
 /* Sign-in profiles: one list, identical rows. Admin is a quiet side tag, not
    a separate class of user — keeps the floor screen uniform. */
 
