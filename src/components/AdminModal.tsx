@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { useSettings } from '../config/SettingsContext';
 import {
+  CDC_STATUS_EVENT,
+  listScannerPorts,
+  type ScannerPort,
+} from '../capture/useCdcCapture';
+import { listen } from '@tauri-apps/api/event';
+import {
   minutesToSessionTimeout,
   SESSION_TIMEOUT_MAX_MINUTES,
   SESSION_TIMEOUT_MIN_MINUTES,
@@ -23,9 +29,10 @@ import { useSession } from '../session/SessionContext';
 
 /**
  * Admin panel: batch add / CSV import, badge enrollment, and settings.
- * While this modal is open the global wedge capture is suspended, so the
- * scanner and badge reader type directly into whichever field has focus
- * (that's how badge enrollment captures the badge ID).
+ * While this modal is open the global HID wedge capture is suspended, so the
+ * badge reader types directly into whichever field has focus (that's how badge
+ * enrollment captures the badge ID). A CDC label scanner does not type, so it
+ * is paused for the same window rather than firing checkout under the modal.
  */
 
 interface AdminModalProps {
@@ -590,12 +597,44 @@ function SettingsTab() {
   const [dropStatus, setDropStatus] = useState<string | null>(null);
   const [dropSaving, setDropSaving] = useState(false);
   const [dropSaved, setDropSaved] = useState(false);
+  const [scannerPorts, setScannerPorts] = useState<ScannerPort[]>([]);
+  const [scannerListError, setScannerListError] = useState<string | null>(null);
+  const [cdcLiveStatus, setCdcLiveStatus] = useState<string | null>(null);
+  const [portsBusy, setPortsBusy] = useState(false);
 
   useEffect(() => {
     void store.getSetting(BACKUP_FOLDER_KEY).then((v) => setBackupFolder(v ?? ''));
     void store.getSetting(BACKUP_LAST_STATUS_KEY).then((v) => setBackupStatus(parseBackupStatus(v)));
     void store.getSetting(DROP_FOLDER_KEY).then((v) => setDropFolder(v ?? ''));
   }, [store]);
+
+  const refreshScannerPorts = () => {
+    if (storeKind !== 'sqlite') return;
+    setPortsBusy(true);
+    setScannerListError(null);
+    void listScannerPorts()
+      .then((ports) => setScannerPorts(ports))
+      .catch((err: unknown) => {
+        setScannerListError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setPortsBusy(false));
+  };
+
+  useEffect(() => {
+    refreshScannerPorts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- list once when Settings opens
+  }, [storeKind]);
+
+  useEffect(() => {
+    if (storeKind !== 'sqlite') return;
+    let unlisten: (() => void) | undefined;
+    void listen<string>(CDC_STATUS_EVENT, (event) => {
+      if (typeof event.payload === 'string') setCdcLiveStatus(event.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, [storeKind]);
 
   /**
    * Saving also reads the folder, because a typo in a path is invisible
@@ -791,6 +830,83 @@ function SettingsTab() {
             interaction. Adjust while watching floor timing — start generous (e.g. 20 min).
           </span>
         </label>
+      </div>
+
+      <h3>Label scanner</h3>
+      <p className="admin-hint">
+        HID keyboard mode types one character at a time and drops keys on the longer
+        printed QRs. CDC reads the scanner as a COM port so the whole decode arrives
+        at once. The badge reader stays a keyboard either way.
+      </p>
+      <div className="admin-form">
+        <label>
+          Scanner connection
+          <select
+            value={settings.scannerTransport}
+            onChange={(e) =>
+              updateSettings({
+                scannerTransport: e.target.value === 'cdc' ? 'cdc' : 'hid',
+              })
+            }
+            disabled={storeKind !== 'sqlite'}
+          >
+            <option value="hid">USB keyboard (HID)</option>
+            <option value="cdc">USB serial (CDC)</option>
+          </select>
+        </label>
+        {settings.scannerTransport === 'cdc' && (
+          <>
+            <label>
+              COM port
+              <div className="admin-slider-row">
+                <select
+                  value={settings.cdcPort}
+                  onChange={(e) => updateSettings({ cdcPort: e.target.value })}
+                  disabled={storeKind !== 'sqlite' || portsBusy}
+                >
+                  <option value="">Choose a port…</option>
+                  {settings.cdcPort &&
+                    !scannerPorts.some((p) => p.name === settings.cdcPort) && (
+                      <option value={settings.cdcPort}>{settings.cdcPort} (saved)</option>
+                    )}
+                  {scannerPorts.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={storeKind !== 'sqlite' || portsBusy}
+                  onClick={refreshScannerPorts}
+                >
+                  {portsBusy ? 'Listing…' : 'Refresh'}
+                </button>
+              </div>
+            </label>
+            <label>
+              Baud
+              <input
+                type="number"
+                value={settings.cdcBaud}
+                onChange={(e) =>
+                  updateSettings({ cdcBaud: Number(e.target.value) || 9600 })
+                }
+                disabled={storeKind !== 'sqlite'}
+              />
+              <span className="admin-hint">
+                USB CDC usually ignores baud. Leave 9600 unless the scanner docs say
+                otherwise. Suffix CR or LF on the scanner if you can.
+              </span>
+            </label>
+            {scannerListError && <p className="admin-hint">{scannerListError}</p>}
+            {cdcLiveStatus && <p className="admin-hint">{cdcLiveStatus}</p>}
+            {storeKind !== 'sqlite' && (
+              <p className="admin-hint">CDC needs the desktop app — a browser has no COM ports.</p>
+            )}
+          </>
+        )}
       </div>
 
       <h3>Capture &amp; behavior</h3>

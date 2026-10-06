@@ -5,9 +5,10 @@ the `@AGENTS.md` import in `CLAUDE.md`. Keep the content here so both tools stay
 
 **Label Verification System** — a machine double-check and digital audit trail supplementing the
 FMI B001 / FMLB003 paper "Label Log Out" process on the production floor. React 19 + Vite +
-TypeScript, no backend. The Zebra scanner and RFID badge reader are both USB keyboard wedges.
-The floor station is a Tauri desktop app with SQLite; `npm run dev` in a browser is for
-development only and uses IndexedDB.
+TypeScript, no backend. The RFID badge reader is a USB keyboard wedge. The Zebra
+scanner can be HID keyboard (legacy, drops keys on long printed QRs) or USB CDC
+(COM port — the floor setting). The floor station is a Tauri desktop app with SQLite;
+`npm run dev` in a browser is for development only and uses IndexedDB.
 
 ## Commands
 
@@ -250,6 +251,19 @@ mean granting a broad static scope. Two narrow commands are less machinery and a
 `read_drop_file` takes folder and name **separately** and rejects a name containing a separator,
 `..`, or `:`, so the frontend cannot ask for a path outside the configured folder.
 
+### Label scanner CDC
+
+HID keyboard mode types one character at a time. The printed-roll QR is long enough that
+Windows drops keys, so the station never sees a complete payload. USB CDC sends the decode
+over a COM port instead.
+
+Admin → Settings → **Scanner connection** → USB serial (CDC), then pick the COM port Windows
+assigned. [scanner.rs](src-tauri/src/scanner.rs) lists ports, opens only the one named, and
+emits `cdc-scan`. The name must look like `COM4` — same idea as `read_drop_file` refusing a
+path. The badge reader stays a keyboard wedge. `npm run dev` in a browser has no COM ports.
+
+Use **USB CDC Host**, not SSI-over-CDC. SSI is a binary protocol this reader does not speak.
+
 ### The two Windows failure modes this is built around
 
 - **OneDrive Files On-Demand placeholders.** The filename is on disk while the contents are not.
@@ -335,9 +349,10 @@ re-import can replace the log.
 - Sounds are gated at each call site — [sounds.ts](src/audio/sounds.ts) has no internal gate.
   Verify and mismatch use `soundEnabled`. Sign-out uses `signOutSoundEnabled`, which defaults
   to off and never plays on launch.
-- Tunable thresholds live in [settings.ts:13-20](src/config/settings.ts#L13-L20) and are editable
+- Tunable thresholds live in [settings.ts](src/config/settings.ts) and are editable
   at runtime under Admin → Settings: `badgePattern` (default `^\d{5,14}$` — 5-digit Alltech prox
-  badges), `burstGapMs` (40), `commitPauseMs` (250), `autoAdvanceMs` (2500, now inert).
+  badges), `burstGapMs` (40), `commitPauseMs` (250), `autoAdvanceMs` (2500, now inert),
+  `scannerTransport` (`hid` or `cdc`), `cdcPort`, `cdcBaud` (9600).
 - Operator-facing copy names the thing to do and the batch it applies to (`This order expects
   BO636845-02 (label 2 of 3). Scan that label, not a different run.`). Rejections are deliberate
   teaching moments in this flow, so keep them specific rather than generic.

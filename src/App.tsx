@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { playError } from './audio/sounds';
+import { useCdcCapture } from './capture/useCdcCapture';
 import { useWedgeCapture } from './capture/useWedgeCapture';
 import type { CaptureCommit } from './capture/useWedgeCapture';
 import { ActivityDrawer } from './components/ActivityDrawer';
@@ -127,6 +128,16 @@ export default function App() {
     },
     [settings.badgePattern, settings.soundEnabled, session, verification, pageBatches],
   );
+
+  useCdcCapture({
+    enabled: settings.scannerTransport === 'cdc' && !!settings.cdcPort.trim(),
+    port: settings.cdcPort,
+    baud: settings.cdcBaud,
+    onScan: (text) => {
+      if (adminOpen || verification.recheckPrompt || sheetCompleteOpen) return;
+      void handleCommit({ text, isScanner: true });
+    },
+  });
 
   const capture = useWedgeCapture({
     enabled: !adminOpen && !verification.recheckPrompt && !sheetCompleteOpen,
