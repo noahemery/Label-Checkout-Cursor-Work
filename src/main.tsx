@@ -4,6 +4,7 @@ import './app.css';
 import App from './App';
 import { SettingsProvider } from './config/SettingsContext';
 import { AppDataProvider } from './data/AppDataContext';
+import { InboxSync } from './data/InboxSync';
 import { SheetPageProvider } from './data/SheetPageContext';
 import { SessionProvider } from './session/SessionContext';
 
@@ -13,7 +14,9 @@ createRoot(document.getElementById('root')!).render(
       <SettingsProvider>
         <SheetPageProvider>
           <SessionProvider>
-            <App />
+            <InboxSync>
+              <App />
+            </InboxSync>
           </SessionProvider>
         </SheetPageProvider>
       </SettingsProvider>

@@ -3,9 +3,9 @@ import { invoke } from '@tauri-apps/api/core';
 /**
  * The shared folder D365 exports land in.
  *
- * Someone runs the export in D365 and saves the CSV to a SharePoint folder that
- * syncs down to the station. The station notices the new file and offers it —
- * nobody carries a USB stick to the floor.
+ * Someone runs the export in D365 on another PC. The sender window copies the
+ * finished CSV into a folder on this station (see scripts/d365-inbox). The
+ * station imports that file on its own.
  *
  * `CsvSource` is the seam. Today the only implementation reads a synced folder
  * through two Rust commands. When Graph access is approved a `GraphSource`

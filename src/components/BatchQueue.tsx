@@ -80,6 +80,8 @@ interface BatchQueueProps {
   activeFamilyParentId: string | null;
   activeMemberBatchId: string | null;
   orderPhase: FamilyCheckoutPhase | null;
+  /** Rows whose expected label code is withheld until their label is recorded. */
+  hiddenLabelBatchIds: ReadonlySet<string>;
   onSelectFamily: (family: BatchFamilyGroup) => void;
   onOpenTestLabels?: () => void;
 }
@@ -89,6 +91,7 @@ export function BatchQueue({
   activeFamilyParentId,
   activeMemberBatchId,
   orderPhase,
+  hiddenLabelBatchIds,
   onSelectFamily,
   onOpenTestLabels,
 }: BatchQueueProps) {
@@ -263,7 +266,15 @@ export function BatchQueue({
         </td>
         <td className="queue-product">{batch.productName ?? ''}</td>
         <td>{batch.itemNumber ?? ''}</td>
-        <td>{batch.labelCode ?? ''}</td>
+        <td>
+          {hiddenLabelBatchIds.has(batch.id) ? (
+            <span className="queue-label-hidden" title="Read the label code off the roll">
+              on roll
+            </span>
+          ) : (
+            (batch.labelCode ?? '')
+          )}
+        </td>
         <td className="queue-qty-run">{formatRunQty(batch)}</td>
         <td className="queue-qty-split">{formatSplitQty(batch, memberCount)}</td>
         <td className="queue-qty-total">{formatOrderTotal(familyTotal)}</td>

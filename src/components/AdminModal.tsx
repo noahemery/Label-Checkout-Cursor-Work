@@ -764,10 +764,9 @@ function SettingsTab() {
 
       <h3>D365 export folder</h3>
       <p className="admin-hint">
-        Where the person who runs the D365 export saves the CSV — a SharePoint folder
-        synced to this station, or a network share. The station checks it every
-        30 seconds and offers anything it has not imported yet. Nothing is imported
-        without someone confirming it.
+        Local inbox on this station. The PC that runs D365 copies finished CSVs here.
+        The station checks it every 30 seconds and imports a finished file on its own.
+        Choosing a file in the D365 panel still asks for a preview first.
       </p>
       <div className="admin-form">
         <label>
@@ -775,14 +774,13 @@ function SettingsTab() {
           <input
             value={dropFolder}
             onChange={(e) => setDropFolder(e.target.value)}
-            placeholder="C:\Users\you\Alltech, Inc\Label Printing - D365 Exports"
+            placeholder="C:\LabelVerification\Inbox"
             spellCheck={false}
             disabled={storeKind !== 'sqlite'}
           />
           <span className="admin-hint">
-            Leave empty to turn this off and import by hand. In OneDrive, set the folder
-            to &ldquo;Always keep on this device&rdquo; — the station cannot read a file
-            that has not downloaded.
+            Leave empty to turn this off and import by hand. Point this at the local
+            inbox, not at a OneDrive folder — a file that has not downloaded cannot be read.
           </span>
         </label>
         <div className="admin-roster-actions">
@@ -968,6 +966,19 @@ function SettingsTab() {
           Sound on sign-out / idle timeout
           <span className="admin-hint">
             Off by default. Does not play when the app starts.
+          </span>
+        </label>
+        <label className="admin-check">
+          <input
+            type="checkbox"
+            checked={settings.reopenWholeFamily}
+            onChange={(e) => updateSettings({ reopenWholeFamily: e.target.checked })}
+          />
+          Check the whole order back in
+          <span className="admin-hint">
+            On: already-checked-out labels ask for the parent QR, then Check back in
+            returns every run in that order to waiting. Off: only the scanned label
+            (the original behaviour).
           </span>
         </label>
       </div>

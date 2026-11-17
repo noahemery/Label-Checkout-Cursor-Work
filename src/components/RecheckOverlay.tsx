@@ -2,6 +2,7 @@ import type { RecheckPrompt } from '../verification/useVerification';
 
 interface RecheckOverlayProps {
   prompt: RecheckPrompt;
+  typedBuffer: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -16,8 +17,10 @@ function formatVerifiedAt(iso: string | null): string {
   });
 }
 
-export function RecheckOverlay({ prompt, onConfirm, onCancel }: RecheckOverlayProps) {
+export function RecheckOverlay({ prompt, typedBuffer, onConfirm, onCancel }: RecheckOverlayProps) {
   const { batch } = prompt;
+  const familyMode = prompt.scope === 'family';
+  const canConfirm = !familyMode || prompt.parentConfirmed;
 
   return (
     <div className="recheck-overlay">
@@ -33,10 +36,41 @@ export function RecheckOverlay({ prompt, onConfirm, onCancel }: RecheckOverlayPr
           </>
         )}
         {batch.verifiedAt && <> at {formatVerifiedAt(batch.verifiedAt)}</>}.
+        {familyMode && prompt.familySize > 1 && (
+          <>
+            {' '}
+            Checking back in will return all {prompt.familySize} labels in this order to waiting.
+          </>
+        )}
       </div>
-      <div className="recheck-question">Check this label back in?</div>
+
+      {familyMode && !prompt.parentConfirmed && (
+        <>
+          <div className="recheck-question">
+            Scan parent {prompt.parentBatchNumber} to check this order back in
+          </div>
+          <p className="recheck-wait">
+            {typedBuffer ? (
+              <>Reading {typedBuffer}</>
+            ) : (
+              <>Waiting for the parent label QR.</>
+            )}
+          </p>
+        </>
+      )}
+
+      {familyMode && prompt.parentConfirmed && (
+        <div className="recheck-question">
+          Parent {prompt.parentBatchNumber} scanned. Check this order back in?
+        </div>
+      )}
+
+      {!familyMode && <div className="recheck-question">Check this label back in?</div>}
+
+      {prompt.notice && <p className="recheck-notice">{prompt.notice}</p>}
+
       <div className="recheck-actions">
-        <button className="btn btn-big btn-rescan" onClick={onConfirm}>
+        <button className="btn btn-big btn-rescan" disabled={!canConfirm} onClick={onConfirm}>
           CHECK BACK IN
         </button>
         <button className="btn btn-big btn-flag" onClick={onCancel}>

@@ -87,6 +87,26 @@ What must not regress:
 No test will catch a regression in any of these — there are no tests. If a refactor appears to
 need one of them, stop and ask.
 
+### Labels without a QR
+
+A rare label is printed with no QR. Its bottom still carries UPC, batch number and expiration
+date as 1D barcodes; the label code is printed text only. It uses the same scanning path, not a
+separate mode: scan the **batch number barcode**, then **type the label code** and press Enter.
+The comparison, run order and badge sign-off are unchanged.
+
+- `VerificationState.labelEntry` records how each half arrived (`qr` / `barcode` / `typed`),
+ and it rides onto `FamilyMemberPair.entry`. `keyedEntrySuffix`
+ ([familyCheckout.ts](src/domain/familyCheckout.ts)) appends `[no QR — batch by barcode, label
+ code typed]` to that member's `mismatch`, `verify` and `flag` audit details. The operator's own
+ badge signs for it, same as a QR label.
+- While an order is scanning, the expected label code of every not-yet-recorded member is
+ withheld from both the order steps panel and the batch log (`unrecordedMemberIds`). Otherwise a
+ typed code could be copied off the monitor and the check would compare D365 with itself. Do not
+ put it back on screen.
+- `looksLikeDate` ([resolve.ts](src/domain/resolve.ts)) catches the expiration date barcode. It is
+ all digits, so it would otherwise match `badgePattern` and read as an unknown badge. The UPC is
+ already rejected as a product code.
+
 ### Label code matching is prefix-based
 
 The D365 `Label` column holds a short code — `US0`, `CA0`, `JP0`, `GT0`, `SA6`, `PET`, `PURINA`,
@@ -228,14 +248,30 @@ loudly rather than import zero operators and look like it worked.
 
 ## Getting the D365 export onto the station
 
-Somebody runs the export in D365 and saves the CSV into a SharePoint folder that syncs down to
-the station. The station polls that folder and offers anything it has not imported. The folder
-path is set under Admin → Settings (`lvs-drop-folder`; empty turns it off and import goes back
-to the file picker).
+The AIO account has no SharePoint license, and the app does not talk to SharePoint. The PC
+that runs D365 copies a finished CSV into a folder that lives on the station. The station
+polls that local folder and imports a finished file on its own. The folder path is set under
+Admin → Settings (`lvs-drop-folder`; empty turns it off and import goes back to the file picker).
 
-**Finding a file is automatic; importing it is not.** The banner and the file picker both land
-on the preview, because the batch log is what operators check labels against and nothing should
-appear there that nobody chose to put there. Column mapping is not part of that path.
+Delivery is the window [scripts/d365-inbox/LabelStation.ps1](scripts/d365-inbox/LabelStation.ps1)
+on the D365 PC (launch it with `Start Label Station.bat`). It copies through
+[Send-D365Export.ps1](scripts/d365-inbox/Send-D365Export.ps1) to the share `\\<aio>\LabelInbox`.
+The station watches the same directory locally (`C:\LabelVerification\Inbox`). The copy writes
+`*.csv.partial` and renames to `*.csv` only after the byte count matches, and it stamps a
+unique name so a repeat save of `print-run.csv` is still a new file. The station writes
+`station-status.json` back into that folder so the window can list sheets. Hide, show, and
+remove arrive as `hide-<id>.request`, `show-<id>.request`, and `remove-<id>.request`.
+Setup and the share ACL are in [scripts/d365-inbox/DESIGN.md](scripts/d365-inbox/DESIGN.md).
+
+**The inbox imports by itself. The file picker does not.** Someone on the D365 PC chose the
+file by clicking Send, so the station does not ask again. A file dropped straight into the
+folder is treated the same way. Choosing a file in the D365 panel still opens the preview,
+because that path has no separate person confirming it. A file that adds zero new batch
+numbers does not leave an empty sheet — the session is deleted and the handled ledger
+(`lvs-inbox-handled`) stops the next poll from trying it again. A file whose columns do not
+match the saved layout is left in the folder and reported in `station-status.json`. Column
+mapping is not part of the inbox path.
+
 `mappingForHeaders` uses the saved layout whenever its batch column is still in the file, so
 the usual D365 export previews the same way every time. Mapping opens only when the batch
 column cannot be found, or when someone presses **Edit column mapping** because the preview
@@ -313,9 +349,14 @@ There is no automated test runner. Floor-style testing uses the real control flo
 2. Enroll a badge in Admin; sign in.
 3. Find the order with the **search bar** above the batch log, then click it — that opens it.
 4. For each member, scan a synthetic printed-label QR from **Test labels** (Admin or D365 panel;
-   admin-only, hidden in operator preview), paste `batch|item|product|labelCode|YYYY-MM-DD` into
-   the wedge input, or hand-type batch + label code (two Enter commits).
+ admin-only, hidden in operator preview), paste `batch|item|product|labelCode|YYYY-MM-DD` into
+ the wedge input, or hand-type batch + label code (two Enter commits). The hand-typed path is
+ the no-QR label path: after the badge tap the `verify` audit row must end with the
+ `[no QR — …]` suffix, and typing `20280318` must give the expiration-date message.
 5. Badge tap to confirm — with the badge of whoever is signed in.
+6. To check an order back in: scan a verified label. **Scan parent …** appears; scan the
+   parent QR, then **Check back in**. Every run in that family returns to waiting. Uncheck
+   **Check the whole order back in** under Admin → Settings to reopen only the scanned label.
 
 `buildLabelQrPayload` ([referenceQr.ts](src/domain/referenceQr.ts)) builds the live roll string
 from imported rows (`batch|item|name|labelCode|date`). Happy-path synthetic QRs match the
@@ -352,7 +393,8 @@ re-import can replace the log.
 - Tunable thresholds live in [settings.ts](src/config/settings.ts) and are editable
   at runtime under Admin → Settings: `badgePattern` (default `^\d{5,14}$` — 5-digit Alltech prox
   badges), `burstGapMs` (40), `commitPauseMs` (250), `autoAdvanceMs` (2500, now inert),
-  `scannerTransport` (`hid` or `cdc`), `cdcPort`, `cdcBaud` (9600).
+  `scannerTransport` (`hid` or `cdc`), `cdcPort`, `cdcBaud` (9600),
+  `reopenWholeFamily` (default on — parent scan then the whole order returns to waiting).
 - Operator-facing copy names the thing to do and the batch it applies to (`This order expects
   BO636845-02 (label 2 of 3). Scan that label, not a different run.`). Rejections are deliberate
   teaching moments in this flow, so keep them specific rather than generic.

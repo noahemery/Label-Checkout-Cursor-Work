@@ -22,6 +22,8 @@
   --red: #ff5252;
   --blue: #3d9eff;
   --alltech-accent: #b45728;
+  --checkout-orange: #e8772e;
+  --checkout-orange-rgb: 232, 119, 46;
   --zone-radius: 14px;
   --font-mono: 'Consolas', 'Cascadia Mono', ui-monospace, monospace;
   --topbar-height: 3.25rem;
@@ -424,7 +426,7 @@ body {
 
 .main-floor {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 1fr);
   gap: 1.25rem;
   align-items: stretch;
   min-height: 0;
@@ -442,7 +444,9 @@ body {
   flex-direction: column;
 }
 
-.checkout-rail {
+/* Doubled class so this outranks .zone-panel, which is declared later and
+   would otherwise put back the thin grey border and overflow: hidden. */
+.checkout-rail.zone-panel {
   position: sticky;
   top: 1.25rem;
   align-self: stretch;
@@ -454,9 +458,22 @@ body {
   max-height: 100%;
   overflow-y: auto;
   background: var(--panel);
-  border: 3px solid var(--amber);
+  border: 5px solid var(--checkout-orange);
   border-radius: var(--zone-radius);
-  box-shadow: 0 0 0 4px rgba(var(--amber-rgb), 0.22);
+  box-shadow:
+    0 0 0 4px rgba(var(--checkout-orange-rgb), 0.25),
+    0 8px 32px rgba(var(--checkout-orange-rgb), 0.3);
+}
+
+.es {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.85em;
+  font-weight: 500;
+  font-style: italic;
+  opacity: 0.8;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .checkout-rail .verification-embedded {
@@ -487,58 +504,145 @@ body {
 }
 
 .checkout-rail .slots-single .slot {
-  min-height: 148px;
+  min-height: 170px;
   border-radius: 14px;
 }
 
 .checkout-rail .slots-single .slot-header {
-  padding: 0.55rem 0.65rem;
+  padding: 0.6rem 0.85rem;
   gap: 0.5rem;
 }
 
 .checkout-rail .slots-single .slot-title {
-  font-size: 0.78rem;
+  font-size: 0.95rem;
   letter-spacing: 0.03em;
 }
 
 .checkout-rail .slots-single .slot-subtitle {
-  font-size: 0.68rem;
+  font-size: 0.8rem;
 }
 
 .checkout-rail .slots-single .slot-body {
-  padding: 0.55rem;
+  padding: 0.75rem;
 }
 
 .checkout-rail .slots-single .slot-batch {
-  font-size: 0.9rem;
+  font-size: 1.6rem;
 }
 
 .checkout-rail .slots-single .slot-labelcode {
-  font-size: 0.78rem;
+  font-size: 1.1rem;
+}
+
+.checkout-rail .slots-single .slot-need-code {
+  font-size: 1.1rem;
 }
 
 .checkout-rail .slots-single .slot-instruction-primary {
-  font-size: 0.72rem;
+  font-size: 1.15rem;
 }
 
 .checkout-rail .slots-single .slot-instruction-sub {
-  font-size: 0.65rem;
+  font-size: 0.95rem;
+}
+
+.checkout-rail .slots-single .slot-locked-body {
+  min-height: 90px;
 }
 
 .checkout-rail .scan-zone-head {
-  padding: 0.75rem 1rem 0;
+  padding: 1rem 1.5rem 0;
+}
+
+.checkout-rail .zone-tag {
+  font-size: 0.8rem;
+  color: #fff;
+  background: var(--checkout-orange);
+  border-color: var(--checkout-orange);
 }
 
 .checkout-rail .zone-title {
-  font-size: 1rem;
+  font-size: 1.5rem;
 }
 
 .checkout-rail .zone-desc {
-  font-size: 0.82rem;
+  font-size: 1.05rem;
+}
+
+.checkout-rail .checkout-guide {
+  flex-direction: row;
+  gap: 0.5rem;
+}
+
+.checkout-rail .checkout-guide li {
+  flex: 1;
+  padding: 0.6rem 0.75rem;
+  font-size: 1rem;
+}
+
+.checkout-rail .checkout-guide li.is-current {
+  background: var(--checkout-orange);
+  border-color: var(--checkout-orange);
+}
+
+.checkout-rail .scan-zone-steps-wrap {
+  padding: 0.75rem 1.5rem 0.5rem;
+}
+
+.checkout-rail .order-steps-idle-text {
+  font-size: 1.05rem;
+}
+
+.checkout-rail .order-steps-order {
+  font-size: 1.1rem;
+}
+
+.checkout-rail .order-steps-count {
+  font-size: 0.8rem;
+}
+
+.checkout-rail .order-steps-list {
+  gap: 0.4rem;
+}
+
+.checkout-rail .order-step {
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+}
+
+.checkout-rail .order-step-icon {
+  width: 1.85rem;
+  height: 1.85rem;
+  font-size: 0.95rem;
+}
+
+.checkout-rail .order-step-title {
+  font-size: 1rem;
+}
+
+.checkout-rail .order-step-batch {
+  font-size: 1.1rem;
+}
+
+.checkout-rail .order-step-meta,
+.checkout-rail .order-step-problem {
+  font-size: 0.8rem;
+}
+
+.checkout-rail .badge-prompt-text {
+  font-size: 1.15rem;
+}
+
+.checkout-rail .badge-prompt-sub {
+  font-size: 0.9rem;
+}
+
+.checkout-rail .verdict-nextup {
+  font-size: 1rem;
 }
 
 .checkout-rail .slots {
-  padding: 0 1rem 0.75rem;
+  padding: 0 1.5rem 0.75rem;
   gap: 0.65rem;
   flex-shrink: 0;
 }
@@ -1714,6 +1818,15 @@ body {
   color: var(--dim);
 }
 
+.slot-noqr-hint {
+  margin: 0.35rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(125, 146, 171, 0.35);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--dim);
+}
+
 .slot-waiting {
   display: flex;
   flex-direction: column;
@@ -2025,7 +2138,7 @@ body {
 .recheck-overlay {
   position: fixed;
   inset: 0;
-  z-index: 95;
+  z-index: 105;
   background: rgba(12, 30, 60, 0.96);
   display: flex;
   flex-direction: column;
@@ -2063,6 +2176,25 @@ body {
   font-size: 1.6rem;
   font-weight: 800;
   margin-top: 0.5rem;
+}
+
+.recheck-wait {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--dim);
+}
+
+.recheck-notice {
+  margin: 0;
+  max-width: 36rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--red);
+}
+
+.recheck-actions .btn-rescan:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .recheck-actions {
@@ -2443,6 +2575,11 @@ body {
   width: 5.25rem;
   min-width: 5.25rem;
   box-sizing: border-box;
+}
+
+.queue-label-hidden {
+  color: var(--dim);
+  font-style: italic;
 }
 
 .queue-product {

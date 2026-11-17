@@ -1,7 +1,7 @@
 //! Reading CSV exports out of a folder the app does not own.
 //!
-//! The D365 export is produced by a person and lands in a shared folder — a
-//! synced OneDrive/SharePoint directory today, something Graph-backed later.
+//! The D365 export is produced on another PC and copied into a folder on this
+//! station (see scripts/d365-inbox). A Graph fetch is a later option.
 //! The frontend has no filesystem access at all, so these two commands are the
 //! entire surface: list what is there, read one file.
 //!
@@ -108,6 +108,98 @@ pub fn list_drop_folder(folder: String) -> Result<Vec<FolderFile>, String> {
 
     files.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(files)
+}
+
+const STATUS_NAME: &str = "station-status.json";
+const MAX_STATUS_BYTES: usize = 1024 * 1024;
+
+/// `hide-<uuid>.request`, `show-<uuid>.request`, or `remove-<uuid>.request`.
+fn is_inbox_request(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".request") else {
+        return false;
+    };
+    let Some((action, id)) = stem.split_once('-') else {
+        return false;
+    };
+    if !matches!(action, "hide" | "show" | "remove") {
+        return false;
+    }
+    let parts: Vec<&str> = id.split('-').collect();
+    let widths = [8, 4, 4, 4, 12];
+    parts.len() == widths.len()
+        && parts.iter().zip(widths).all(|(part, width)| {
+            part.len() == width && part.chars().all(|c| c.is_ascii_hexdigit())
+        })
+}
+
+/// Publish the sheet list the D365 PC window reads. One fixed name, replaced
+/// by writing a temp file then renaming, so a reader never sees a half file
+/// for long. On Windows a rename will not replace an existing file, so the
+/// previous status is removed first.
+#[tauri::command]
+pub fn write_inbox_status(folder: String, body: String) -> Result<(), String> {
+    if folder.trim().is_empty() {
+        return Err("No inbox folder is configured.".into());
+    }
+    if body.len() > MAX_STATUS_BYTES {
+        return Err("Station status is too large to write.".into());
+    }
+    let dir = Path::new(&folder);
+    if !dir.is_dir() {
+        return Err(format!("{folder} is not a folder this station can reach."));
+    }
+    let tmp = dir.join("station-status.json.tmp");
+    let dest = dir.join(STATUS_NAME);
+    fs::write(&tmp, body.as_bytes()).map_err(|e| format!("Could not write station status — {e}"))?;
+    let _ = fs::remove_file(&dest);
+    if let Err(e) = fs::rename(&tmp, &dest) {
+        let _ = fs::remove_file(&tmp);
+        return Err(format!("Could not publish station status — {e}"));
+    }
+    Ok(())
+}
+
+/// Names of hide / show / remove requests waiting in the inbox.
+#[tauri::command]
+pub fn list_inbox_requests(folder: String) -> Result<Vec<String>, String> {
+    if folder.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let dir = Path::new(&folder);
+    if !dir.is_dir() {
+        return Err(format!("{folder} is not a folder this station can reach."));
+    }
+    let entries = fs::read_dir(dir).map_err(|e| format!("Could not read {folder} — {e}"))?;
+    let mut names = Vec::new();
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if is_inbox_request(&name) {
+            names.push(name);
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+/// Delete one request file. Anything that is not a request name is refused.
+#[tauri::command]
+pub fn delete_inbox_request(folder: String, name: String) -> Result<(), String> {
+    if !is_inbox_request(&name) {
+        return Err(format!("{name} is not a sheet request."));
+    }
+    let path = safe_child(&folder, &name)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Could not remove {name} — {e}")),
+    }
+}
+
+#[tauri::command]
+pub fn station_host_name() -> String {
+    std::env::var("COMPUTERNAME").unwrap_or_else(|_| "station".to_string())
 }
 
 /// Read one CSV out of the folder as text.
@@ -261,5 +353,51 @@ mod tests {
         let dir = TempDir::new("missing");
         let err = read_drop_file(dir.path(), "nope.csv".into()).unwrap_err();
         assert!(err.contains("nope.csv"), "got {err}");
+    }
+
+    #[test]
+    fn status_file_replaces_the_previous_copy() {
+        let dir = TempDir::new("status");
+        write_inbox_status(dir.path(), "{\"sheets\":[]}".into()).unwrap();
+        write_inbox_status(dir.path(), "{\"sheets\":[1]}".into()).unwrap();
+        let text = fs::read_to_string(dir.0.join("station-status.json")).unwrap();
+        assert_eq!(text, "{\"sheets\":[1]}");
+        assert!(!dir.0.join("station-status.json.tmp").exists());
+    }
+
+    #[test]
+    fn request_list_keeps_only_real_requests() {
+        let dir = TempDir::new("requests");
+        let id = "550e8400-e29b-41d4-a716-446655440000";
+        dir.write(&format!("hide-{id}.request"), b"x");
+        dir.write(&format!("remove-{id}.request"), b"x");
+        dir.write("hide-not-a-uuid.request", b"x");
+        dir.write("export.csv", b"x");
+        dir.write("notes.request", b"x");
+
+        let names = list_inbox_requests(dir.path()).unwrap();
+        assert_eq!(
+            names,
+            vec![format!("hide-{id}.request"), format!("remove-{id}.request")]
+        );
+    }
+
+    #[test]
+    fn deleting_a_request_cannot_escape_the_folder() {
+        let dir = TempDir::new("delete-request");
+        dir.write("export.csv", b"keep");
+        assert!(delete_inbox_request(dir.path(), "export.csv".into()).is_err());
+        assert!(delete_inbox_request(dir.path(), "../export.csv".into()).is_err());
+        assert_eq!(fs::read(dir.0.join("export.csv")).unwrap(), b"keep");
+
+        let name = "show-550e8400-e29b-41d4-a716-446655440000.request";
+        dir.write(name, b"x");
+        delete_inbox_request(dir.path(), name.into()).unwrap();
+        assert!(!dir.0.join(name).exists());
+        delete_inbox_request(
+            dir.path(),
+            "show-550e8400-e29b-41d4-a716-446655440000.request".into(),
+        )
+        .unwrap();
     }
 }

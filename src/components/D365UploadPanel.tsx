@@ -15,6 +15,7 @@ import {
 } from '../data/csvMapping';
 import { useSheetPage } from '../data/SheetPageContext';
 import { useSession } from '../session/SessionContext';
+import { useInboxStatus } from '../data/InboxSync';
 import { useDropFolder } from '../data/useDropFolder';
 import { describeHold } from '../data/dropFolder';
 
@@ -66,6 +67,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
   const { activePageId, pageBatches, setImportActive, deleteImportedSheet } = useSheetPage();
   const { operator } = useSession();
   const dropFolder = useDropFolder();
+  const inboxStatus = useInboxStatus();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [headers, setHeaders] = useState<string[]>([]);
@@ -173,24 +175,6 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
       });
   };
 
-  const openFromDropFolder = (name: string) => {
-    setError(null);
-    setBusy(true);
-    void dropFolder
-      .read(name)
-      .then((text) => {
-        // The rest of the import path takes a File, so the text coming back
-        // from the shared folder is wrapped as one. A file that arrived on its
-        // own then goes through exactly the same parse, preview and confirm as
-        // one somebody picked by hand.
-        beginImportFile(new File([text], name, { type: 'text/csv' }));
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Could not read that file.');
-        setBusy(false);
-      });
-  };
-
   const setFieldMapping = (field: CsvField, header: string) => {
     setMapping((m) => {
       const next = { ...m };
@@ -292,28 +276,16 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
 
   return (
     <div className="d365-upload">
-      {/* Exports the station found on its own. Hidden while an import is in
-          progress so the banner cannot compete with the preview. */}
       {!importOpen && dropFolder.enabled && (
         <>
-          {dropFolder.scan?.ready.map((file) => (
-            <div className="d365-drop-banner" key={file.name} role="status">
-              <div className="d365-drop-text">
-                <strong>New export from D365</strong>
-                <span className="d365-drop-filename" title={file.name}>
-                  {file.name}
-                </span>
-              </div>
-              <button
-                type="button"
-                className="btn btn-primary d365-upload-btn"
-                disabled={busy}
-                onClick={() => openFromDropFolder(file.name)}
-              >
-                Review and import
-              </button>
-            </div>
-          ))}
+          {inboxStatus.line && (
+            <p
+              className={`d365-drop-hint${inboxStatus.bad ? ' d365-drop-hint-bad' : ''}`}
+              role="status"
+            >
+              {inboxStatus.line}
+            </p>
+          )}
           {holdNote && (
             <p className="d365-drop-hint" role="status">
               {holdNote}
@@ -331,8 +303,8 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
         <div className="zone-head-text">
           <h3 className="zone-title">D365 batch data</h3>
           <p className="zone-desc">
-            Upload today&rsquo;s print run export (.csv) from Dynamics 365. The usual layout
-            opens straight on a preview.
+            A CSV copied into the inbox folder is added to the log on its own. Choosing a
+            file here still opens a preview before anything is saved.
           </p>
         </div>
 

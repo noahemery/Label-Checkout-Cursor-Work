@@ -15,6 +15,10 @@ pub fn run() {
     .invoke_handler(tauri::generate_handler![
       drop_folder::list_drop_folder,
       drop_folder::read_drop_file,
+      drop_folder::write_inbox_status,
+      drop_folder::list_inbox_requests,
+      drop_folder::delete_inbox_request,
+      drop_folder::station_host_name,
       scanner::list_scanner_ports,
       scanner::start_scanner,
       scanner::stop_scanner
