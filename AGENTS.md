@@ -45,6 +45,19 @@ baseline below before assuming your change caused a failure:
 These come from `eslint-plugin-react-hooks` v7 rules that postdate the code; none is a behavior
 defect. Build is the only currently-green gate.
 
+## Git workflow
+
+- **Commit at a working stopping point, push to `work`. Never push to `main`.** `main` only
+  moves by merging a pull request from `work`, after the change has been tried on the station.
+- [ci.yml](.github/workflows/ci.yml) runs `npm run build` and the Rust tests on every push. Run
+  both locally before pushing so the run is not the first time anyone finds out.
+- [release.yml](.github/workflows/release.yml) builds the NSIS installer into a **draft** GitHub
+  Release when a `v*` tag is pushed. The tag must equal `version` in
+  [tauri.conf.json](src-tauri/tauri.conf.json) (and `Cargo.toml`) — bump those first, then tag.
+- **The GitHub repo is public.** `Test_Data/` (real D365 exports and FMLB forms), `LVS Vault/`
+  (internal notes) and `Hardware/` (vendor manuals) are in `.gitignore` and stay out of git.
+  Do not force-add them, and check `git status` for anything else internal before pushing.
+
 ## The core control — do not break this
 
 **Nothing is written to a batch until a badge that matches the signed-in operator taps at the

@@ -16,6 +16,11 @@ dist-ssr
 # floor station. Transferred by OneDrive/USB, not through git.
 installer/
 
+# The repo is public. Real D365 exports, internal notes and vendor manuals stay local.
+Test_Data/
+LVS Vault/
+Hardware/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
