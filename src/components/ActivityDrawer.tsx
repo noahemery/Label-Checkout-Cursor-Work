@@ -24,6 +24,9 @@ const TYPE_META: Record<AuditType, { label: string; tone: string }> = {
   batch_add: { label: 'Batch added', tone: 'neutral' },
   batch_delete: { label: 'Batch deleted', tone: 'warn' },
   csv_import: { label: 'CSV import', tone: 'neutral' },
+  import_hidden: { label: 'CSV hidden', tone: 'warn' },
+  import_shown: { label: 'CSV shown', tone: 'neutral' },
+  import_deleted: { label: 'CSV removed', tone: 'warn' },
   page_select: { label: 'Print run selected', tone: 'neutral' },
   // Retained so historical events from the paper-sheet era still render.
   sheet_photo: { label: 'Sheet photo (legacy)', tone: 'neutral' },

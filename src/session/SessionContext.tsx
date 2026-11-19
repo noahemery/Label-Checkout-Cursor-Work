@@ -8,7 +8,7 @@ import {
   useState,
 } from 'react';
 import type { ReactNode } from 'react';
-import { playError, playSuccess } from '../audio/sounds';
+import { playError, playSignOut, playSuccess } from '../audio/sounds';
 import { useSettings } from '../config/SettingsContext';
 import { useAppData } from '../data/AppDataContext';
 import type { Operator, UserRole } from '../domain/types';
@@ -115,11 +115,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     idleTimerRef.current = setTimeout(() => {
       idleTimerRef.current = null;
       void (async () => {
-        if (settings.soundEnabled) playError();
+        if (settings.signOutSoundEnabled) playSignOut();
         await endSession('Signed out — idle timeout (no activity)');
       })();
     }, settings.sessionTimeoutMs);
-  }, [clearIdleTimer, endSession, settings.sessionTimeoutMs, settings.soundEnabled]);
+  }, [clearIdleTimer, endSession, settings.sessionTimeoutMs, settings.signOutSoundEnabled]);
 
   useEffect(() => {
     if (!operator) {
@@ -189,6 +189,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (!found) return 'unknown';
 
       if (operator && operator.id === found.id) {
+        if (settings.signOutSoundEnabled) playSignOut();
         await signOut();
         return 'signed_out';
       }
@@ -196,7 +197,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       await signInUser(found, 'badge');
       return 'signed_in';
     },
-    [store, operator, signOut, signInUser],
+    [store, operator, signOut, signInUser, settings.signOutSoundEnabled],
   );
 
   const signInManual = useCallback(

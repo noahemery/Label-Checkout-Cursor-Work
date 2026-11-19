@@ -29,6 +29,31 @@ export function looksLikeGtin(value: string): boolean {
   return d.length >= 12 && d.length <= 16;
 }
 
+function validMonthDay(mm: string, dd: string): boolean {
+  const m = Number(mm);
+  const d = Number(dd);
+  return m >= 1 && m <= 12 && d >= 1 && d <= 31;
+}
+
+/**
+ * The expiration date barcode on the bottom of a label. It is all digits, so
+ * without this it matches the badge pattern and reads as an unknown badge.
+ * Accepts YYYYMMDD, MMDDYYYY, YYMMDD and GS1 AI 17 (`(17)YYMMDD`), with or
+ * without separators.
+ */
+export function looksLikeDate(value: string): boolean {
+  if (!/^[\d\s()./-]+$/.test(value.trim())) return false;
+  const d = digitsOnly(value);
+  if (d.length === 8) {
+    if (/^20\d{2}/.test(d) && validMonthDay(d.slice(4, 6), d.slice(6, 8))) return true;
+    if (/20\d{2}$/.test(d) && validMonthDay(d.slice(0, 2), d.slice(2, 4))) return true;
+    if (d.startsWith('17') && validMonthDay(d.slice(4, 6), d.slice(6, 8))) return true;
+    return false;
+  }
+  if (d.length === 6) return validMonthDay(d.slice(2, 4), d.slice(4, 6));
+  return false;
+}
+
 /**
  * True when the value matches a label code on a batch in the current print
  * run. Legacy labels carry a bare label code in the QR (e.g.

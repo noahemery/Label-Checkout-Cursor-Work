@@ -22,6 +22,8 @@
   --red: #ff5252;
   --blue: #3d9eff;
   --alltech-accent: #b45728;
+  --checkout-orange: #e8772e;
+  --checkout-orange-rgb: 232, 119, 46;
   --zone-radius: 14px;
   --font-mono: 'Consolas', 'Cascadia Mono', ui-monospace, monospace;
   --topbar-height: 3.25rem;
@@ -424,7 +426,7 @@ body {
 
 .main-floor {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 1fr);
   gap: 1.25rem;
   align-items: stretch;
   min-height: 0;
@@ -442,7 +444,9 @@ body {
   flex-direction: column;
 }
 
-.checkout-rail {
+/* Doubled class so this outranks .zone-panel, which is declared later and
+   would otherwise put back the thin grey border and overflow: hidden. */
+.checkout-rail.zone-panel {
   position: sticky;
   top: 1.25rem;
   align-self: stretch;
@@ -453,6 +457,23 @@ body {
   height: 100%;
   max-height: 100%;
   overflow-y: auto;
+  background: var(--panel);
+  border: 5px solid var(--checkout-orange);
+  border-radius: var(--zone-radius);
+  box-shadow:
+    0 0 0 4px rgba(var(--checkout-orange-rgb), 0.25),
+    0 8px 32px rgba(var(--checkout-orange-rgb), 0.3);
+}
+
+.es {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.85em;
+  font-weight: 500;
+  font-style: italic;
+  opacity: 0.8;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .checkout-rail .verification-embedded {
@@ -483,58 +504,145 @@ body {
 }
 
 .checkout-rail .slots-single .slot {
-  min-height: 148px;
+  min-height: 170px;
   border-radius: 14px;
 }
 
 .checkout-rail .slots-single .slot-header {
-  padding: 0.55rem 0.65rem;
+  padding: 0.6rem 0.85rem;
   gap: 0.5rem;
 }
 
 .checkout-rail .slots-single .slot-title {
-  font-size: 0.78rem;
+  font-size: 0.95rem;
   letter-spacing: 0.03em;
 }
 
 .checkout-rail .slots-single .slot-subtitle {
-  font-size: 0.68rem;
+  font-size: 0.8rem;
 }
 
 .checkout-rail .slots-single .slot-body {
-  padding: 0.55rem;
+  padding: 0.75rem;
 }
 
 .checkout-rail .slots-single .slot-batch {
-  font-size: 0.9rem;
+  font-size: 1.6rem;
 }
 
 .checkout-rail .slots-single .slot-labelcode {
-  font-size: 0.78rem;
+  font-size: 1.1rem;
+}
+
+.checkout-rail .slots-single .slot-need-code {
+  font-size: 1.1rem;
 }
 
 .checkout-rail .slots-single .slot-instruction-primary {
-  font-size: 0.72rem;
+  font-size: 1.15rem;
 }
 
 .checkout-rail .slots-single .slot-instruction-sub {
-  font-size: 0.65rem;
+  font-size: 0.95rem;
+}
+
+.checkout-rail .slots-single .slot-locked-body {
+  min-height: 90px;
 }
 
 .checkout-rail .scan-zone-head {
-  padding: 0.75rem 1rem 0;
+  padding: 1rem 1.5rem 0;
+}
+
+.checkout-rail .zone-tag {
+  font-size: 0.8rem;
+  color: #fff;
+  background: var(--checkout-orange);
+  border-color: var(--checkout-orange);
 }
 
 .checkout-rail .zone-title {
-  font-size: 1rem;
+  font-size: 1.5rem;
 }
 
 .checkout-rail .zone-desc {
-  font-size: 0.82rem;
+  font-size: 1.05rem;
+}
+
+.checkout-rail .checkout-guide {
+  flex-direction: row;
+  gap: 0.5rem;
+}
+
+.checkout-rail .checkout-guide li {
+  flex: 1;
+  padding: 0.6rem 0.75rem;
+  font-size: 1rem;
+}
+
+.checkout-rail .checkout-guide li.is-current {
+  background: var(--checkout-orange);
+  border-color: var(--checkout-orange);
+}
+
+.checkout-rail .scan-zone-steps-wrap {
+  padding: 0.75rem 1.5rem 0.5rem;
+}
+
+.checkout-rail .order-steps-idle-text {
+  font-size: 1.05rem;
+}
+
+.checkout-rail .order-steps-order {
+  font-size: 1.1rem;
+}
+
+.checkout-rail .order-steps-count {
+  font-size: 0.8rem;
+}
+
+.checkout-rail .order-steps-list {
+  gap: 0.4rem;
+}
+
+.checkout-rail .order-step {
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+}
+
+.checkout-rail .order-step-icon {
+  width: 1.85rem;
+  height: 1.85rem;
+  font-size: 0.95rem;
+}
+
+.checkout-rail .order-step-title {
+  font-size: 1rem;
+}
+
+.checkout-rail .order-step-batch {
+  font-size: 1.1rem;
+}
+
+.checkout-rail .order-step-meta,
+.checkout-rail .order-step-problem {
+  font-size: 0.8rem;
+}
+
+.checkout-rail .badge-prompt-text {
+  font-size: 1.15rem;
+}
+
+.checkout-rail .badge-prompt-sub {
+  font-size: 0.9rem;
+}
+
+.checkout-rail .verdict-nextup {
+  font-size: 1rem;
 }
 
 .checkout-rail .slots {
-  padding: 0 1rem 0.75rem;
+  padding: 0 1.5rem 0.75rem;
   gap: 0.65rem;
   flex-shrink: 0;
 }
@@ -597,6 +705,36 @@ body {
 
 .scan-zone-head {
   padding: 1rem 1.25rem 0;
+}
+
+.checkout-guide {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.55rem 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.checkout-guide li {
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.checkout-guide li.is-current {
+  color: #fff;
+  background: var(--amber);
+  border-color: var(--amber);
+}
+
+.checkout-guide li.is-done {
+  color: var(--green);
+  border-color: rgba(40, 199, 106, 0.45);
 }
 
 /* Holds the step checklist. It takes whatever height the rail has left over
@@ -779,27 +917,26 @@ body {
   position: relative;
   display: flex;
   align-items: center;
-  margin-top: 0.45rem;
-  min-width: 18rem;
-  max-width: 26rem;
+  margin: 0.85rem 1.25rem 0.35rem;
 }
 
 .queue-search-icon {
   position: absolute;
-  left: 0.55rem;
-  font-size: 0.8rem;
-  opacity: 0.65;
+  left: 0.85rem;
+  font-size: 1.05rem;
+  opacity: 0.85;
   pointer-events: none;
 }
 
 .queue-search-input {
   font: inherit;
-  font-size: 0.85rem;
+  font-size: 1.05rem;
+  font-weight: 600;
   width: 100%;
-  padding: 0.4rem 1.9rem 0.4rem 1.9rem;
-  border: 1px solid var(--line-bright);
-  border-radius: 999px;
-  background: var(--panel-2);
+  padding: 0.7rem 2.4rem 0.7rem 2.5rem;
+  border: 2px solid var(--line-bright);
+  border-radius: 10px;
+  background: var(--panel-elevated);
   color: var(--text);
 }
 
@@ -815,7 +952,9 @@ body {
 
 .queue-search-clear {
   position: absolute;
-  right: 0.35rem;
+  top: 50%;
+  right: 0.55rem;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1011,6 +1150,47 @@ body {
   gap: 0.85rem;
 }
 
+/* An export the station found in the shared folder by itself. Loud enough to
+   be noticed across the aisle, since nobody is looking for it. */
+.d365-drop-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--blue);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+}
+
+.d365-drop-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.d365-drop-filename {
+  font-size: 0.85rem;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.d365-drop-hint {
+  margin: 0 0 0.6rem;
+  font-size: 0.82rem;
+  color: var(--dim);
+}
+
+.d365-drop-hint-bad {
+  color: var(--red);
+  font-weight: 600;
+}
+
 .d365-upload-aside {
   display: flex;
   flex-direction: column;
@@ -1032,6 +1212,84 @@ body {
 .d365-upload-btn-spacer {
   display: block;
   min-width: 9.5rem;
+}
+
+.d365-sheets {
+  margin: 0.75rem 0 0.25rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.d365-sheets-hint {
+  margin: 0 0 0.55rem;
+  font-size: 0.82rem;
+  color: var(--dim);
+}
+
+.d365-sheets-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.d365-sheets-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem 0.55rem;
+  align-items: center;
+}
+
+.d365-sheets-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.d365-sheets-remove {
+  flex-shrink: 0;
+}
+
+.d365-sheets-confirm {
+  grid-column: 1 / -1;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(232, 93, 93, 0.45);
+  border-radius: 6px;
+  background: rgba(232, 93, 93, 0.08);
+  color: var(--text);
+}
+
+.d365-sheets-confirm p {
+  margin: 0 0 0.45rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.d365-sheets-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+.d365-sheets-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.d365-sheets-meta {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: var(--dim);
 }
 
 .d365-feedback-file {
@@ -1560,6 +1818,15 @@ body {
   color: var(--dim);
 }
 
+.slot-noqr-hint {
+  margin: 0.35rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(125, 146, 171, 0.35);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--dim);
+}
+
 .slot-waiting {
   display: flex;
   flex-direction: column;
@@ -1871,7 +2138,7 @@ body {
 .recheck-overlay {
   position: fixed;
   inset: 0;
-  z-index: 95;
+  z-index: 105;
   background: rgba(12, 30, 60, 0.96);
   display: flex;
   flex-direction: column;
@@ -1909,6 +2176,25 @@ body {
   font-size: 1.6rem;
   font-weight: 800;
   margin-top: 0.5rem;
+}
+
+.recheck-wait {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--dim);
+}
+
+.recheck-notice {
+  margin: 0;
+  max-width: 36rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--red);
+}
+
+.recheck-actions .btn-rescan:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .recheck-actions {
@@ -2053,6 +2339,13 @@ body {
   align-items: center;
   gap: 0.8rem;
   color: var(--dim);
+}
+
+.manual-signin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
 }
 
 /* Sign-in profiles: one list, identical rows. Admin is a quiet side tag, not
@@ -2256,6 +2549,37 @@ body {
 .queue-batch {
   font-weight: 800;
   font-size: 1.05rem;
+  white-space: nowrap;
+}
+
+.queue-batch-line {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+/* Fixed tracks, not content width. An empty spacer with flex-basis auto
+   collapses to nothing, which is why one-label numbers sat too far left. */
+.queue-expand-btn,
+.queue-expand-spacer {
+  flex: 0 0 1.75rem;
+  width: 1.75rem;
+  min-width: 1.75rem;
+}
+
+.queue-roll-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 5.25rem;
+  width: 5.25rem;
+  min-width: 5.25rem;
+  box-sizing: border-box;
+}
+
+.queue-label-hidden {
+  color: var(--dim);
+  font-style: italic;
 }
 
 .queue-product {
@@ -2690,7 +3014,8 @@ body {
   color: var(--dim);
 }
 
-.admin-form input {
+.admin-form input,
+.admin-form select {
   font: inherit;
   background: var(--panel-2);
   border: 1px solid var(--line);
@@ -2699,7 +3024,8 @@ body {
   padding: 0.55rem 0.7rem;
 }
 
-.admin-form input:focus {
+.admin-form input:focus,
+.admin-form select:focus {
   outline: 2px solid var(--blue);
 }
 
@@ -2718,6 +3044,20 @@ body {
   color: var(--dim);
   font-size: 0.85rem;
   margin: 0.2rem 0 0.6rem;
+}
+
+/* A backup that has stopped working must not read like ordinary help text. */
+.admin-hint-bad {
+  color: var(--red);
+  font-weight: 600;
+}
+
+/* Roster export/import, and the backup folder controls. */
+.admin-roster-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0.2rem 0 0.9rem;
 }
 
 .admin-message {
@@ -2909,9 +3249,9 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  margin-right: 0.35rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-right: 0;
   padding: 0;
   border: none;
   border-radius: 6px;
@@ -2986,10 +3326,9 @@ body {
   gap: 0.5rem;
 }
 
-.admin-slider-row {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
+.admin-slider-row select {
+  flex: 1;
+  min-width: 0;
 }
 
 .admin-slider {

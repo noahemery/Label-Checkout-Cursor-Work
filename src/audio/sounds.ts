@@ -47,3 +47,8 @@ export function playError(): void {
 export function playBlip(): void {
   tone(1200, 0, 0.06, 'square', 0.12);
 }
+
+/** Soft sign-out cue. Off at launch — the mismatch buzz was scaring people. */
+export function playSignOut(): void {
+  tone(330, 0, 0.14, 'sine', 0.12);
+}

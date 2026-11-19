@@ -9,7 +9,7 @@
  */
 
 /** Bump when SCHEMA_STATEMENTS changes in a way existing databases must follow. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /**
  * Audit history is immutable. Deletes are blocked unless the retention gate is
@@ -31,7 +31,8 @@ export const SCHEMA_STATEMENTS: string[] = [
      page_id     TEXT NOT NULL,
      filename    TEXT NOT NULL,
      imported_at TEXT NOT NULL,
-     label_count INTEGER NOT NULL DEFAULT 0
+     label_count INTEGER NOT NULL DEFAULT 0,
+     active      INTEGER NOT NULL DEFAULT 1
    )`,
 
   `CREATE INDEX IF NOT EXISTS ix_import_sessions_page

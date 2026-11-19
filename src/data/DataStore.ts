@@ -1,4 +1,5 @@
 import type { AuditEvent, Batch, ImportSession, Operator, UserRole } from '../domain/types';
+import type { RosterImportResult } from './roster';
 
 /**
  * Repository abstraction for all persistence.
@@ -49,6 +50,11 @@ export interface ImportResult {
   importId: string;
 }
 
+export interface DeleteImportResult {
+  filename: string;
+  deleted: number;
+}
+
 export interface DataStore {
   // Batches
   getBatches(): Promise<Batch[]>;
@@ -58,6 +64,13 @@ export interface DataStore {
   importBatches(pageId: string, inputs: BatchInput[], meta?: ImportMeta): Promise<ImportResult>;
   getImportSessions(): Promise<ImportSession[]>;
   getImportSessionsForPage(pageId: string): Promise<ImportSession[]>;
+  /** Hide or show a CSV on the live log. Rows stay in the database. */
+  setImportSessionActive(importId: string, active: boolean): Promise<void>;
+  /**
+   * Delete a CSV import and every batch it added. Audit events stay.
+   * Forgetting the session is what lets the same filename be imported again.
+   */
+  deleteImportSession(importId: string): Promise<DeleteImportResult>;
   verifyRow(batchId: string, operator: Operator): Promise<Batch>;
   reopenRow(batchId: string): Promise<Batch>;
   flagRow(batchId: string): Promise<Batch>;
@@ -71,6 +84,11 @@ export interface DataStore {
   enrollOperator(badgeId: string, name: string, role?: UserRole): Promise<Operator>;
   updateUserRole(operatorId: string, role: UserRole): Promise<Operator>;
   removeOperator(operatorId: string): Promise<void>;
+  /**
+   * Apply a roster from another station. Matches on `badgeIdNorm` — the badge
+   * is the identity — and never removes anyone who is absent from the file.
+   */
+  upsertOperators(operators: Operator[]): Promise<RosterImportResult>;
 
   // Audit trail (scan events, verifications, mismatches, re-opens, sessions)
   saveScanEvent(input: AuditInput): Promise<AuditEvent>;
@@ -79,4 +97,14 @@ export interface DataStore {
   // Station configuration (SQLite settings table on desktop, localStorage in browser)
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
+
+  /**
+   * Write a consistent snapshot of everything this station holds to an absolute
+   * path. Only the SQLite store can do this — a browser has no filesystem — so
+   * callers must check for the method rather than assume it.
+   */
+  snapshotTo?(absolutePath: string): Promise<void>;
+
+  /** Absolute path of the database file. Only the SQLite store has one. */
+  readonly databasePath?: string;
 }

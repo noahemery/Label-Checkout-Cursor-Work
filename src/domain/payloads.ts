@@ -3,19 +3,21 @@ import { cleanPayload, normalizeId } from './normalize';
 /**
  * Versioned, pipe-delimited payload spec.
  *
- *   Label QR (BarTender, printed on the roll):
+ *   Printed label QR (BarTender / Rick's layout — this is the live standard):
+ *     {batch}|{item}|{productName}|{labelCode}|{YYYY-MM-DD}
+ *     example: BO676767|02.0120.067.012|NRP DIGEST PACK|US0|2028-03-18
+ *   Legacy printed label QR (still accepted):
  *     LBL|1|{batch}|{item}|{labelCode}
- *   Reference QR (rendered on screen from the D365 import):
+ *   Reference QR (parser still recognizes it so a stray one is rejected by name):
  *     REF|1|{batch}|{item}|{labelCode}|{qty}|{DOM}|{DOE}
  *   Legacy paper sheet row QR:
  *     FMIB001|1|{batch}|{item}|{labelCode}|{qty}|{DOM}|{DOE}
  *   Badge:          matched by configurable pattern (default: 5–14 digits)
  *   Anything else:  raw identifier (1D batch barcode, UPC, hand-typed batch)
  *
- * The two live forms play different roles: `REF|` opens an order at the
- * station (once), `LBL|` checks a single label inside an open order. Scanning
- * the wrong form for the current phase is always rejected — see the phase
- * guards in useVerification. `FMIB001|` is legacy and no longer accepted.
+ * The printed roll is checked inside an open order. Scanning REF| or FMIB001|
+ * for the current phase is always rejected — see the phase guards in
+ * useVerification.
  */
 
 export const SHEET_FORM_ID = 'FMIB001';
@@ -56,7 +58,9 @@ export interface LabelPayload {
   version: string;
   batchNumber: string;
   itemNumber: string | null;
+  productName: string | null;
   labelCode: string | null;
+  doe: string | null;
 }
 
 /** The QR the app renders on screen from imported D365 data. */
@@ -122,6 +126,40 @@ function quantity(fields: string[], index: number): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * Rick's printed-roll layout: batch|item|product name|label code|date
+ *
+ * Fields are split on `|` and trimmed, so spaces around the pipes do not
+ * matter. Product names keep their internal spaces (`NRP DIGEST PACK`).
+ * Extra pipes inside the name are joined back together so a 5-field payload
+ * is still recovered.
+ */
+function parsePrintedRoll(cleaned: string, raw: string): LabelPayload | null {
+  if (!cleaned.includes('|')) return null;
+  const fields = cleaned.split('|').map((f) => f.trim());
+  if (fields.length < 5) return null;
+
+  const batchNumber = fields[0];
+  const itemNumber = text(fields, 1);
+  const doe = text(fields, fields.length - 1);
+  const labelCode = text(fields, fields.length - 2);
+  const productName = fields.slice(2, -2).join(' ').replace(/\s+/g, ' ').trim() || null;
+
+  if (!batchNumber || !labelCode) return null;
+  if (FORM_IDS.some((id) => batchNumber.toUpperCase() === id)) return null;
+
+  return {
+    kind: 'label',
+    raw,
+    version: PAYLOAD_VERSION,
+    batchNumber,
+    itemNumber,
+    productName,
+    labelCode,
+    doe,
+  };
+}
+
 export function parsePayload(input: string, badgePattern: string): ParsedPayload {
   const cleaned = cleanPayload(input);
   const upper = cleaned.toUpperCase();
@@ -146,7 +184,16 @@ export function parsePayload(input: string, badgePattern: string): ParsedPayload
     const labelCode = text(fields, 4);
 
     if (formId === LABEL_FORM_ID) {
-      return { kind: 'label', raw: input, version, batchNumber, itemNumber, labelCode };
+      return {
+        kind: 'label',
+        raw: input,
+        version,
+        batchNumber,
+        itemNumber,
+        productName: null,
+        labelCode,
+        doe: null,
+      };
     }
 
     const extras = {
@@ -170,7 +217,10 @@ export function parsePayload(input: string, badgePattern: string): ParsedPayload
     return { kind: 'sheet', raw: input, version, batchNumber, itemNumber, labelCode, ...extras };
   }
 
-  let badgeRe: RegExp | null = null;
+  const printed = parsePrintedRoll(cleaned, input);
+  if (printed) return printed;
+
+  let badgeRe: RegExp | null;
   try {
     badgeRe = new RegExp(badgePattern);
   } catch {

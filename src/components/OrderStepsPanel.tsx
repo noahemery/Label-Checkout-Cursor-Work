@@ -1,6 +1,7 @@
 import { familyOrderTotal, formatOrderTotal, formatRunQty } from '../domain/batchDisplay';
 import type { FamilyCheckoutPhase, FamilyMemberPair } from '../domain/familyCheckout';
 import type { Batch } from '../domain/types';
+import { Es } from './Es';
 
 interface OrderStepsPanelProps {
   phase: FamilyCheckoutPhase | null;
@@ -28,6 +29,12 @@ function stepTitle(index: number, total: number): string {
   return `Scan child batch ${index}`;
 }
 
+function stepTitleEs(index: number, total: number): string {
+  if (total === 1) return 'Escanee la etiqueta';
+  if (index === 0) return 'Escanee el lote principal';
+  return `Escanee el lote hijo ${index}`;
+}
+
 function stepIcon(state: StepState, position: number): string {
   if (state === 'done') return '✓';
   if (state === 'mismatch') return '✕';
@@ -48,6 +55,7 @@ export function OrderStepsPanel({
       <div className="order-steps order-steps-idle">
         <p className="order-steps-idle-text">
           Click an order in the batch log to start a checkout.
+          <Es>Haga clic en una orden de la lista para empezar.</Es>
         </p>
       </div>
     );
@@ -86,10 +94,13 @@ export function OrderStepsPanel({
                 {stepIcon(state, i + 1)}
               </span>
               <span className="order-step-body">
-                <span className="order-step-title">{stepTitle(i, total)}</span>
+                <span className="order-step-title">
+                  {stepTitle(i, total)}
+                  <Es>{stepTitleEs(i, total)}</Es>
+                </span>
                 <span className="order-step-batch">{member.batchNumber}</span>
                 <span className="order-step-meta">
-                  Label {member.labelCode ?? '—'}
+                  {pair ? `Label ${member.labelCode ?? '—'}` : 'Label — read it off the roll'}
                   {formatRunQty(member) ? ` · ${formatRunQty(member)}` : ''}
                 </span>
                 {state === 'mismatch' && pair && (
@@ -118,6 +129,11 @@ export function OrderStepsPanel({
               {mismatches.length > 0
                 ? 'Tap your badge to close this order'
                 : 'Tap your badge to check out'}
+              <Es>
+                {mismatches.length > 0
+                  ? 'Pase su tarjeta para cerrar esta orden'
+                  : 'Pase su tarjeta para dar salida'}
+              </Es>
             </span>
             <span className="order-step-meta">
               {allScanned
@@ -125,6 +141,11 @@ export function OrderStepsPanel({
                   ? `${operatorName} — the badge must match who is signed in`
                   : 'The badge must match who is signed in'
                 : 'After every label above is scanned'}
+              <Es>
+                {allScanned
+                  ? 'La tarjeta debe ser de quien inició sesión'
+                  : 'Después de escanear todas las etiquetas de arriba'}
+              </Es>
             </span>
           </span>
         </li>

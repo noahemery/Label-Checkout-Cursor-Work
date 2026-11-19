@@ -80,6 +80,8 @@ interface BatchQueueProps {
   activeFamilyParentId: string | null;
   activeMemberBatchId: string | null;
   orderPhase: FamilyCheckoutPhase | null;
+  /** Rows whose expected label code is withheld until their label is recorded. */
+  hiddenLabelBatchIds: ReadonlySet<string>;
   onSelectFamily: (family: BatchFamilyGroup) => void;
   onOpenTestLabels?: () => void;
 }
@@ -89,6 +91,7 @@ export function BatchQueue({
   activeFamilyParentId,
   activeMemberBatchId,
   orderPhase,
+  hiddenLabelBatchIds,
   onSelectFamily,
   onOpenTestLabels,
 }: BatchQueueProps) {
@@ -187,10 +190,9 @@ export function BatchQueue({
     const isCurrentMember = batch.id === activeMemberBatchId;
 
     const statusClass = isParentHeader ? familyStatusClass(familyMembers) : batch.status;
+    // A one-label order is still an order: "0/1 done", same as a split family.
     const statusText = isParentHeader
-      ? hasChildren
-        ? familyStatusLabel(familyMembers)
-        : STATUS_LABEL[batch.status]
+      ? familyStatusLabel(familyMembers.length > 0 ? familyMembers : [batch])
       : STATUS_LABEL[batch.status];
 
     const rowClass = [
@@ -226,22 +228,31 @@ export function BatchQueue({
           </span>
         </td>
         <td className={`queue-batch${isChild ? ' queue-batch-child' : ''}`}>
-          {isParentHeader && hasChildren && (
-            <button
-              type="button"
-              className="queue-expand-btn"
-              aria-expanded={expanded}
-              aria-label={expanded ? 'Collapse child batches' : 'Expand child batches'}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleFamily(batch.id);
-              }}
-            >
-              {expanded ? '▼' : '▶'}
-            </button>
-          )}
+          <div className="queue-batch-line">
+          {isParentHeader &&
+            (hasChildren ? (
+              <button
+                type="button"
+                className="queue-expand-btn"
+                aria-expanded={expanded}
+                aria-label={expanded ? 'Collapse child batches' : 'Expand child batches'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleFamily(batch.id);
+                }}
+              >
+                {expanded ? '▼' : '▶'}
+              </button>
+            ) : (
+              <span className="queue-expand-spacer" aria-hidden />
+            ))}
           {isChild && <span className="queue-indent" aria-hidden />}
-          {rollPill(batch, isParentHeader && hasChildren)}
+          {isParentHeader && (
+            <span className="queue-roll-slot">
+              {rollPill(batch, hasChildren)}
+            </span>
+          )}
+          {!isParentHeader && rollPill(batch, false)}
           <span className="queue-batch-number">{batch.batchNumber}</span>
           {isParentHeader && isFamilyActive && orderPhase && (
             <span className={`queue-order-pill queue-order-pill-${orderPhase}`}>
@@ -251,10 +262,19 @@ export function BatchQueue({
           {isParentHeader && hasChildren && (
             <span className="queue-family-count">{familyMembers.length} labels</span>
           )}
+          </div>
         </td>
         <td className="queue-product">{batch.productName ?? ''}</td>
         <td>{batch.itemNumber ?? ''}</td>
-        <td>{batch.labelCode ?? ''}</td>
+        <td>
+          {hiddenLabelBatchIds.has(batch.id) ? (
+            <span className="queue-label-hidden" title="Read the label code off the roll">
+              on roll
+            </span>
+          ) : (
+            (batch.labelCode ?? '')
+          )}
+        </td>
         <td className="queue-qty-run">{formatRunQty(batch)}</td>
         <td className="queue-qty-split">{formatSplitQty(batch, memberCount)}</td>
         <td className="queue-qty-total">{formatOrderTotal(familyTotal)}</td>
@@ -278,31 +298,6 @@ export function BatchQueue({
         <div className="queue-header-left">
           <span className="zone-tag">Batch log</span>
           <h2 className="zone-title">Today&rsquo;s orders</h2>
-          <div className="queue-search">
-            <span className="queue-search-icon" aria-hidden>
-              🔍
-            </span>
-            <input
-              ref={searchRef}
-              type="text"
-              className="queue-search-input"
-              placeholder="Search batch, product, item or label"
-              aria-label="Search today's orders"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={onSearchKeyDown}
-            />
-            {searching && (
-              <button
-                type="button"
-                className="queue-search-clear"
-                onClick={clearSearch}
-                aria-label="Clear search"
-              >
-                ✕
-              </button>
-            )}
-          </div>
         </div>
         <div className="queue-header-right">
           <div className="queue-progress-summary">
@@ -338,6 +333,34 @@ export function BatchQueue({
       {isAdmin && (
         <div className="upload-zone">
           <D365UploadPanel onOpenTestLabels={onOpenTestLabels} />
+        </div>
+      )}
+
+      {(pageBatches.length > 0 || searching) && (
+        <div className="queue-search">
+          <span className="queue-search-icon" aria-hidden>
+            🔍
+          </span>
+          <input
+            ref={searchRef}
+            type="text"
+            className="queue-search-input"
+            placeholder="Search batch number"
+            aria-label="Search today's orders by batch number"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={onSearchKeyDown}
+          />
+          {searching && (
+            <button
+              type="button"
+              className="queue-search-clear"
+              onClick={clearSearch}
+              aria-label="Clear search"
+            >
+              ✕
+            </button>
+          )}
         </div>
       )}
 

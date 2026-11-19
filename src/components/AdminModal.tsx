@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
 import { useSettings } from '../config/SettingsContext';
+import {
+  CDC_STATUS_EVENT,
+  listScannerPorts,
+  type ScannerPort,
+} from '../capture/useCdcCapture';
+import { listen } from '@tauri-apps/api/event';
 import {
   minutesToSessionTimeout,
   SESSION_TIMEOUT_MAX_MINUTES,
@@ -8,14 +14,26 @@ import {
   sessionTimeoutToMinutes,
 } from '../config/settings';
 import { useAppData } from '../data/AppDataContext';
+import {
+  BACKUP_FOLDER_KEY,
+  BACKUP_LAST_STATUS_KEY,
+  describeBackupOutcome,
+  parseBackupStatus,
+  runDailyBackup,
+  type BackupStatusRecord,
+} from '../data/backup';
+import { DB_MIGRATED_KEY, parseDbMigration, type DbMigrationRecord } from '../data/dataLocation';
+import { DROP_FOLDER_KEY, FolderSource } from '../data/dropFolder';
+import { downloadRoster, parseRosterFile, summarizeRosterImport } from '../data/roster';
 import { useSheetPage } from '../data/SheetPageContext';
 import { useSession } from '../session/SessionContext';
 
 /**
  * Admin panel: batch add / CSV import, badge enrollment, and settings.
- * While this modal is open the global wedge capture is suspended, so the
- * scanner and badge reader type directly into whichever field has focus
- * (that's how badge enrollment captures the badge ID).
+ * While this modal is open the global HID wedge capture is suspended, so the
+ * badge reader types directly into whichever field has focus (that's how badge
+ * enrollment captures the badge ID). A CDC label scanner does not type, so it
+ * is paused for the same window rather than firing checkout under the modal.
  */
 
 interface AdminModalProps {
@@ -288,8 +306,9 @@ function BatchesTab({ onOpenTestLabels }: { onOpenTestLabels?: () => void }) {
         Batches on {activePage.referenceNumber} ({pageBatches.length})
       </h3>
       <p className="admin-hint">
-        Only batches in the current print run are listed. To wipe the whole run, use{' '}
-        <strong>Clear run</strong> in the import panel.
+        Only batches from CSVs currently marked active are listed. Hide a sheet from
+        the D365 panel to take it off the log without deleting it, or Remove to
+        delete that file&rsquo;s labels from this station.
       </p>
       <div className="admin-list">
         {pageBatches.map((b) => (
@@ -326,6 +345,45 @@ function PeopleTab() {
   const [enrollRole, setEnrollRole] = useState<'admin' | 'operator'>('operator');
   const [message, setMessage] = useState<string | null>(null);
   const [pendingRemove, setPendingRemove] = useState<{ id: string; name: string } | null>(null);
+  const rosterFileRef = useRef<HTMLInputElement>(null);
+  const [rosterBusy, setRosterBusy] = useState(false);
+
+  const exportRoster = () => {
+    if (operators.length === 0) {
+      setMessage('No badges enrolled here yet — nothing to export.');
+      return;
+    }
+    const filename = downloadRoster(operators);
+    setMessage(`Exported ${operators.length} badge${operators.length === 1 ? '' : 's'} to ${filename}.`);
+  };
+
+  const importRoster = async (file: File) => {
+    setRosterBusy(true);
+    setMessage(null);
+    try {
+      const incoming = parseRosterFile(await file.text());
+      const result = await store.upsertOperators(incoming);
+      await refreshOperators();
+      await logAudit({
+        type: 'enroll',
+        operatorId: operator?.id ?? null,
+        operatorName: operator?.name ?? null,
+        batchNumber: null,
+        detail: `Roster imported from "${file.name}": ${summarizeRosterImport(result)}`,
+      });
+      setMessage(`Roster imported — ${summarizeRosterImport(result)}.`);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Roster import failed.');
+    } finally {
+      setRosterBusy(false);
+    }
+  };
+
+  const onRosterPick = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (file) void importRoster(file);
+  };
 
   const admins = operators.filter((op) => (op.role ?? 'operator') === 'admin');
   const floorOps = operators.filter((op) => (op.role ?? 'operator') === 'operator');
@@ -480,6 +538,39 @@ function PeopleTab() {
         </div>
       )}
 
+      <h3>Move badges to another station</h3>
+      <p className="admin-hint">
+        Enroll everyone once, then carry the roster to the floor station instead of re-scanning
+        thirty badges. Import matches people by <strong>badge ID</strong>: anyone new is added,
+        anyone already here has their name and role updated, and nobody is ever removed by an
+        import.
+      </p>
+      <div className="admin-roster-actions">
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={rosterBusy}
+          onClick={exportRoster}
+        >
+          Export roster…
+        </button>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          disabled={rosterBusy}
+          onClick={() => rosterFileRef.current?.click()}
+        >
+          {rosterBusy ? 'Importing…' : 'Import roster…'}
+        </button>
+        <input
+          ref={rosterFileRef}
+          type="file"
+          accept=".json,application/json"
+          hidden
+          onChange={onRosterPick}
+        />
+      </div>
+
       <h3>Admins ({admins.length})</h3>
       <p className="admin-hint">Badge in opens the admin profile with CSV upload, activity, and settings.</p>
       {renderList(admins, 'No admins enrolled yet.', 'admin')}
@@ -495,8 +586,113 @@ function PeopleTab() {
 
 function SettingsTab() {
   const { settings, updateSettings } = useSettings();
-  const { storeKind } = useAppData();
+  const { store, storeKind } = useAppData();
   const timeoutMinutes = sessionTimeoutToMinutes(settings.sessionTimeoutMs);
+
+  const [backupFolder, setBackupFolder] = useState('');
+  const [backupStatus, setBackupStatus] = useState<BackupStatusRecord | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupSaved, setBackupSaved] = useState(false);
+
+  const [dropFolder, setDropFolder] = useState('');
+  const [dropStatus, setDropStatus] = useState<string | null>(null);
+  const [dropSaving, setDropSaving] = useState(false);
+  const [dropSaved, setDropSaved] = useState(false);
+  const [scannerPorts, setScannerPorts] = useState<ScannerPort[]>([]);
+  const [scannerListError, setScannerListError] = useState<string | null>(null);
+  const [cdcLiveStatus, setCdcLiveStatus] = useState<string | null>(null);
+  const [portsBusy, setPortsBusy] = useState(false);
+  const [dbMigration, setDbMigration] = useState<DbMigrationRecord | null>(null);
+
+  useEffect(() => {
+    void store.getSetting(DB_MIGRATED_KEY).then((v) => setDbMigration(parseDbMigration(v)));
+    void store.getSetting(BACKUP_FOLDER_KEY).then((v) => setBackupFolder(v ?? ''));
+    void store.getSetting(BACKUP_LAST_STATUS_KEY).then((v) => setBackupStatus(parseBackupStatus(v)));
+    void store.getSetting(DROP_FOLDER_KEY).then((v) => setDropFolder(v ?? ''));
+  }, [store]);
+
+  const refreshScannerPorts = () => {
+    if (storeKind !== 'sqlite') return;
+    setPortsBusy(true);
+    setScannerListError(null);
+    void listScannerPorts()
+      .then((ports) => setScannerPorts(ports))
+      .catch((err: unknown) => {
+        setScannerListError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setPortsBusy(false));
+  };
+
+  useEffect(() => {
+    refreshScannerPorts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- list once when Settings opens
+  }, [storeKind]);
+
+  useEffect(() => {
+    if (storeKind !== 'sqlite') return;
+    let unlisten: (() => void) | undefined;
+    void listen<string>(CDC_STATUS_EVENT, (event) => {
+      if (typeof event.payload === 'string') setCdcLiveStatus(event.payload);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, [storeKind]);
+
+  /**
+   * Saving also reads the folder, because a typo in a path is invisible
+   * otherwise — the station would just never find an export and nobody would
+   * know whether that meant "none today" or "wrong folder".
+   */
+  const saveDropFolder = async () => {
+    const trimmed = dropFolder.trim();
+    setDropSaving(true);
+    try {
+      await store.setSetting(DROP_FOLDER_KEY, trimmed);
+      setDropSaved(true);
+      window.setTimeout(() => setDropSaved(false), 2000);
+
+      if (!trimmed) {
+        setDropStatus('Off — exports are imported by hand.');
+        return;
+      }
+      const files = await new FolderSource(trimmed).list();
+      setDropStatus(
+        files.length === 0
+          ? 'Folder reached. No CSV files in it right now.'
+          : `Folder reached — ${files.length} CSV file${files.length === 1 ? '' : 's'} visible.`,
+      );
+    } catch (err) {
+      setDropStatus(`Cannot read that folder — ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setDropSaving(false);
+    }
+  };
+
+  const saveBackupFolder = async () => {
+    await store.setSetting(BACKUP_FOLDER_KEY, backupFolder.trim());
+    setBackupSaved(true);
+    window.setTimeout(() => setBackupSaved(false), 2000);
+  };
+
+  const backupNow = async () => {
+    setBackupBusy(true);
+    try {
+      await store.setSetting(BACKUP_FOLDER_KEY, backupFolder.trim());
+      const outcome = await runDailyBackup(store, backupFolder);
+      setBackupStatus({ at: new Date().toISOString(), text: describeBackupOutcome(outcome) });
+    } catch (err) {
+      // runDailyBackup handles its own snapshot errors, so reaching here means
+      // the settings write failed. Say so rather than leave the button looking
+      // like it worked.
+      setBackupStatus({
+        at: new Date().toISOString(),
+        text: `Backup failed — ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setBackupBusy(false);
+    }
+  };
 
   return (
     <div className="admin-section">
@@ -505,9 +701,19 @@ function SettingsTab() {
         {storeKind === 'sqlite' ? (
           <>
             Running on SQLite. The database file is{' '}
-            <code>label-verification.db</code> under{' '}
-            <code>%APPDATA%\com.alltech.labelverification</code>. Copy that file to
-            back up this station.
+            <code>{store.databasePath ?? 'label-verification.db'}</code>. Every Windows
+            account on this computer opens the same file, so signing in under another
+            login shows the same batches, badges and audit trail. Installing a new
+            version or uninstalling the app does not touch it — only losing the machine
+            does.
+            {dbMigration ? (
+              <>
+                {' '}
+                Copied from <code>{dbMigration.from}</code> on{' '}
+                {new Date(dbMigration.at).toLocaleString()}; that older file was left in
+                place.
+              </>
+            ) : null}
           </>
         ) : (
           <>
@@ -516,6 +722,101 @@ function SettingsTab() {
           </>
         )}
       </p>
+
+      <h3>Daily backup</h3>
+      <p className="admin-hint">
+        This station holds the only copy of its audit trail. Point this at a synced
+        OneDrive folder or a network share and it writes one complete snapshot per day
+        at launch — <code>label-verification-2026-09-24.db</code>. Recovery is copying
+        that file back over the database; there is no import step.
+      </p>
+      <div className="admin-form">
+        <label>
+          Backup folder
+          <input
+            value={backupFolder}
+            onChange={(e) => setBackupFolder(e.target.value)}
+            placeholder="C:\Users\you\OneDrive - Alltech, Inc\Label Verification Backups"
+            spellCheck={false}
+            disabled={storeKind !== 'sqlite'}
+          />
+          <span className="admin-hint">
+            Leave empty to turn backups off. The folder must already exist. Use a full
+            network path (<code>\\server\share\folder</code>) or a USB drive letter — a
+            mapped drive letter like <code>S:</code> only exists for the account that
+            mapped it.
+          </span>
+        </label>
+        <div className="admin-roster-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={backupBusy || storeKind !== 'sqlite'}
+            onClick={() => void saveBackupFolder()}
+          >
+            {backupSaved ? 'Saved' : 'Save folder'}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={backupBusy || !backupFolder.trim() || storeKind !== 'sqlite'}
+            onClick={() => void backupNow()}
+          >
+            {backupBusy ? 'Backing up…' : 'Back up now'}
+          </button>
+        </div>
+        {backupStatus && (
+          <p
+            className={`admin-hint${backupStatus.text.startsWith('Backup failed') ? ' admin-hint-bad' : ''}`}
+            role="status"
+          >
+            {backupStatus.text}
+            <br />
+            Checked {new Date(backupStatus.at).toLocaleString()}
+          </p>
+        )}
+      </div>
+
+      <h3>D365 export folder</h3>
+      <p className="admin-hint">
+        Local inbox on this station. The PC that runs D365 copies finished CSVs here.
+        The station checks it every 30 seconds and imports a finished file on its own.
+        Choosing a file in the D365 panel still asks for a preview first.
+      </p>
+      <div className="admin-form">
+        <label>
+          Watched folder
+          <input
+            value={dropFolder}
+            onChange={(e) => setDropFolder(e.target.value)}
+            placeholder="C:\LabelVerification\Inbox"
+            spellCheck={false}
+            disabled={storeKind !== 'sqlite'}
+          />
+          <span className="admin-hint">
+            Leave empty to turn this off and import by hand. Point this at the local
+            inbox, not at a OneDrive folder — a file that has not downloaded cannot be read.
+          </span>
+        </label>
+        <div className="admin-roster-actions">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={dropSaving || storeKind !== 'sqlite'}
+            onClick={() => void saveDropFolder()}
+          >
+            {dropSaved ? 'Saved' : 'Save folder'}
+          </button>
+        </div>
+        {dropStatus && (
+          <p
+            className={`admin-hint${dropStatus.startsWith('Cannot') ? ' admin-hint-bad' : ''}`}
+            role="status"
+          >
+            {dropStatus}
+          </p>
+        )}
+      </div>
 
       <h3>Session</h3>
       <div className="admin-form">
@@ -542,6 +843,83 @@ function SettingsTab() {
             interaction. Adjust while watching floor timing — start generous (e.g. 20 min).
           </span>
         </label>
+      </div>
+
+      <h3>Label scanner</h3>
+      <p className="admin-hint">
+        HID keyboard mode types one character at a time and drops keys on the longer
+        printed QRs. CDC reads the scanner as a COM port so the whole decode arrives
+        at once. The badge reader stays a keyboard either way.
+      </p>
+      <div className="admin-form">
+        <label>
+          Scanner connection
+          <select
+            value={settings.scannerTransport}
+            onChange={(e) =>
+              updateSettings({
+                scannerTransport: e.target.value === 'cdc' ? 'cdc' : 'hid',
+              })
+            }
+            disabled={storeKind !== 'sqlite'}
+          >
+            <option value="hid">USB keyboard (HID)</option>
+            <option value="cdc">USB serial (CDC)</option>
+          </select>
+        </label>
+        {settings.scannerTransport === 'cdc' && (
+          <>
+            <label>
+              COM port
+              <div className="admin-slider-row">
+                <select
+                  value={settings.cdcPort}
+                  onChange={(e) => updateSettings({ cdcPort: e.target.value })}
+                  disabled={storeKind !== 'sqlite' || portsBusy}
+                >
+                  <option value="">Choose a port…</option>
+                  {settings.cdcPort &&
+                    !scannerPorts.some((p) => p.name === settings.cdcPort) && (
+                      <option value={settings.cdcPort}>{settings.cdcPort} (saved)</option>
+                    )}
+                  {scannerPorts.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={storeKind !== 'sqlite' || portsBusy}
+                  onClick={refreshScannerPorts}
+                >
+                  {portsBusy ? 'Listing…' : 'Refresh'}
+                </button>
+              </div>
+            </label>
+            <label>
+              Baud
+              <input
+                type="number"
+                value={settings.cdcBaud}
+                onChange={(e) =>
+                  updateSettings({ cdcBaud: Number(e.target.value) || 9600 })
+                }
+                disabled={storeKind !== 'sqlite'}
+              />
+              <span className="admin-hint">
+                USB CDC usually ignores baud. Leave 9600 unless the scanner docs say
+                otherwise. Suffix CR or LF on the scanner if you can.
+              </span>
+            </label>
+            {scannerListError && <p className="admin-hint">{scannerListError}</p>}
+            {cdcLiveStatus && <p className="admin-hint">{cdcLiveStatus}</p>}
+            {storeKind !== 'sqlite' && (
+              <p className="admin-hint">CDC needs the desktop app — a browser has no COM ports.</p>
+            )}
+          </>
+        )}
       </div>
 
       <h3>Capture &amp; behavior</h3>
@@ -593,6 +971,30 @@ function SettingsTab() {
             onChange={(e) => updateSettings({ soundEnabled: e.target.checked })}
           />
           Sounds on verify / mismatch
+        </label>
+        <label className="admin-check">
+          <input
+            type="checkbox"
+            checked={settings.signOutSoundEnabled}
+            onChange={(e) => updateSettings({ signOutSoundEnabled: e.target.checked })}
+          />
+          Sound on sign-out / idle timeout
+          <span className="admin-hint">
+            Off by default. Does not play when the app starts.
+          </span>
+        </label>
+        <label className="admin-check">
+          <input
+            type="checkbox"
+            checked={settings.reopenWholeFamily}
+            onChange={(e) => updateSettings({ reopenWholeFamily: e.target.checked })}
+          />
+          Check the whole order back in
+          <span className="admin-hint">
+            On: already-checked-out labels ask for the parent QR, then Check back in
+            returns every run in that order to waiting. Off: only the scanned label
+            (the original behaviour).
+          </span>
         </label>
       </div>
     </div>

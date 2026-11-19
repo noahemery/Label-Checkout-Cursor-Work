@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { playError } from './audio/sounds';
+import { useCdcCapture } from './capture/useCdcCapture';
 import { useWedgeCapture } from './capture/useWedgeCapture';
 import type { CaptureCommit } from './capture/useWedgeCapture';
 import { ActivityDrawer } from './components/ActivityDrawer';
@@ -16,7 +17,7 @@ import { useSheetPage } from './data/SheetPageContext';
 import { cleanPayload } from './domain/normalize';
 import { parsePayload } from './domain/payloads';
 import type { BatchFamilyGroup } from './domain/batchFamily';
-import { findBatchByValue, looksLikeGtin, matchesProductCode } from './domain/resolve';
+import { findBatchByValue, looksLikeDate, looksLikeGtin, matchesProductCode } from './domain/resolve';
 import { useSession } from './session/SessionContext';
 import { useVerification } from './verification/useVerification';
 
@@ -88,6 +89,9 @@ export default function App() {
       if (parsed.kind === 'badge') {
         setGateNotice(null);
 
+        // Don't sign out from under the check-back-in overlay.
+        if (verification.recheckPrompt) return;
+
         // A held order owns the badge: it signs the order off rather than
         // signing the operator out.
         if (verification.awaitingBadge) {
@@ -102,7 +106,8 @@ export default function App() {
         const isLabelData =
           !!findBatchByValue(value, pageBatches) ||
           matchesProductCode(value, pageBatches) ||
-          looksLikeGtin(value);
+          looksLikeGtin(value) ||
+          looksLikeDate(value);
 
         if (!isLabelData) {
           session.reportUnknownBadge(parsed.badgeId);
@@ -128,8 +133,18 @@ export default function App() {
     [settings.badgePattern, settings.soundEnabled, session, verification, pageBatches],
   );
 
+  useCdcCapture({
+    enabled: settings.scannerTransport === 'cdc' && !!settings.cdcPort.trim(),
+    port: settings.cdcPort,
+    baud: settings.cdcBaud,
+    onScan: (text) => {
+      if (adminOpen || sheetCompleteOpen) return;
+      void handleCommit({ text, isScanner: true });
+    },
+  });
+
   const capture = useWedgeCapture({
-    enabled: !adminOpen && !verification.recheckPrompt && !sheetCompleteOpen,
+    enabled: !adminOpen && !sheetCompleteOpen,
     burstGapMs: settings.burstGapMs,
     commitPauseMs: settings.commitPauseMs,
     onCommit: handleCommit,
@@ -176,6 +191,7 @@ export default function App() {
           activeFamilyParentId={verification.familyCheckout?.parentBatchId ?? null}
           activeMemberBatchId={verification.currentMemberBatch?.id ?? null}
           orderPhase={verification.familyCheckout?.phase ?? null}
+          hiddenLabelBatchIds={verification.unrecordedMemberIds}
           onSelectFamily={handleSelectFamily}
           onOpenTestLabels={session.isAdmin ? openTestLabels : undefined}
         />
@@ -203,6 +219,7 @@ export default function App() {
       {verification.recheckPrompt && (
         <RecheckOverlay
           prompt={verification.recheckPrompt}
+          typedBuffer={capture.buffer}
           onConfirm={() => void verification.confirmRecheck()}
           onCancel={verification.dismissRecheck}
         />

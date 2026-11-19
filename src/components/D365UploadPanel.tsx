@@ -5,8 +5,8 @@ import {
   CSV_FIELD_LABELS,
   CSV_REQUIRED,
   analyzeCsvWithMapping,
-  autoDetectMapping,
   loadSavedColumnMapping,
+  mappingForHeaders,
   saveColumnMapping,
   peekCsvHeaders,
   type ColumnMapping,
@@ -15,6 +15,9 @@ import {
 } from '../data/csvMapping';
 import { useSheetPage } from '../data/SheetPageContext';
 import { useSession } from '../session/SessionContext';
+import { useInboxStatus } from '../data/InboxSync';
+import { useDropFolder } from '../data/useDropFolder';
+import { describeHold } from '../data/dropFolder';
 
 const FIELDS = Object.keys(CSV_FIELD_LABELS) as CsvField[];
 
@@ -59,21 +62,27 @@ const SAMPLE_EXPORT_URL = '/sample-d365-export.csv';
 const SAMPLE_EXPORT_NAME = 'sample-d365-export.csv';
 
 export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () => void }) {
-  const { store, refreshBatches, refreshImportSessions, logAudit } = useAppData();
-  const { activePageId, clearPrintRun, pageBatches } = useSheetPage();
+  const { store, batches, importSessions, refreshBatches, refreshImportSessions, logAudit } =
+    useAppData();
+  const { activePageId, pageBatches, setImportActive, deleteImportedSheet } = useSheetPage();
   const { operator } = useSession();
+  const dropFolder = useDropFolder();
+  const inboxStatus = useInboxStatus();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [headers, setHeaders] = useState<string[]>([]);
-  const [mapping, setMapping] = useState<ColumnMapping>(() => loadSavedColumnMapping());
+  const [mapping, setMapping] = useState<ColumnMapping>({});
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [step, setStep] = useState<ImportStep>('mapping');
   const [analysis, setAnalysis] = useState<CsvImportAnalysis | null>(null);
   const [busy, setBusy] = useState(false);
-  const [clearing, setClearing] = useState(false);
+  const [sheetsOpen, setSheetsOpen] = useState(false);
+  const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<ImportFeedback | null>(null);
+  /** Saved layout did not match this file, so columns were guessed. */
+  const [layoutGuessed, setLayoutGuessed] = useState(false);
 
   useEffect(() => {
     try {
@@ -91,28 +100,54 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
     setPendingFile(null);
     setHeaders([]);
     setError(null);
+    setLayoutGuessed(false);
   };
 
+  /**
+   * The usual export goes straight to the preview. Column mapping opens only
+   * when the batch column cannot be found, or when someone asks to edit it.
+   */
   const beginImportFile = (file: File) => {
     setError(null);
     setAnalysis(null);
-    setStep('mapping');
+    setLayoutGuessed(false);
+    setStep('preview');
     setBusy(true);
-    void peekCsvHeaders(file)
-      .then(({ headers: h, errors }) => {
+    void (async () => {
+      try {
+        const { headers: h, errors } = await peekCsvHeaders(file);
         if (h.length === 0) {
           setError(errors[0] ?? 'Could not read column headers from that file.');
           return;
         }
-        const saved = loadSavedColumnMapping();
-        const detected = autoDetectMapping(h);
-        const merged = { ...saved, ...detected };
+        const saved = await loadSavedColumnMapping(store);
+        const resolved = mappingForHeaders(h, saved);
         setHeaders(h);
-        setMapping(merged);
+        setMapping(resolved.mapping);
         setPendingFile(file);
         setImportOpen(true);
-      })
-      .finally(() => setBusy(false));
+
+        if (resolved.source === 'unmapped') {
+          setStep('mapping');
+          setError('This file does not match the usual export. Match the columns below, then review.');
+          return;
+        }
+
+        const result = await analyzeCsvWithMapping(file, resolved.mapping);
+        if (result.rows.length === 0) {
+          setStep('mapping');
+          setError(result.parseErrors[0] ?? 'No batch rows found in file.');
+          return;
+        }
+        setLayoutGuessed(resolved.source === 'detected' && Boolean(saved.batchNumber));
+        setAnalysis(result);
+        setStep('preview');
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Could not read that file.');
+      } finally {
+        setBusy(false);
+      }
+    })();
   };
 
   const onFilePick = (e: ChangeEvent<HTMLInputElement>) => {
@@ -180,7 +215,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
     setError(null);
     void (async () => {
       try {
-        saveColumnMapping(mapping);
+        await saveColumnMapping(store, mapping);
         const result = await store.importBatches(activePageId, analysis.rows, {
           filename: pendingFile.name,
         });
@@ -212,46 +247,82 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
     })();
   };
 
-  const runClearRun = () => {
-    if (pageBatches.length === 0) return;
-    if (!window.confirm('Remove all batches from today\u2019s print run? This cannot be undone.')) {
-      return;
-    }
-    setClearing(true);
+  const pageSessions = importSessions.filter((s) => s.pageId === activePageId);
+  const hiddenCount = pageSessions.filter((s) => s.active === false).length;
+
+  const confirmRemoveSheet = (importId: string) => {
     setError(null);
-    void clearPrintRun()
-      .then(() => {
-        setFeedback(null);
-        localStorage.removeItem(`lvs-d365-last-import-${activePageId}`);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : 'Clear failed.');
-      })
-      .finally(() => setClearing(false));
+    setBusy(true);
+    void (async () => {
+      try {
+        const result = await deleteImportedSheet(importId);
+        if (
+          feedback &&
+          feedback.filename.trim().toLowerCase() === result.filename.trim().toLowerCase()
+        ) {
+          setFeedback(null);
+          localStorage.removeItem(`lvs-d365-last-import-${activePageId}`);
+        }
+        setPendingRemoveId(null);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Could not remove that file.');
+      } finally {
+        setBusy(false);
+      }
+    })();
   };
+
+  const holdNote = dropFolder.scan ? describeHold(dropFolder.scan.held) : null;
 
   return (
     <div className="d365-upload">
+      {!importOpen && dropFolder.enabled && (
+        <>
+          {inboxStatus.line && (
+            <p
+              className={`d365-drop-hint${inboxStatus.bad ? ' d365-drop-hint-bad' : ''}`}
+              role="status"
+            >
+              {inboxStatus.line}
+            </p>
+          )}
+          {holdNote && (
+            <p className="d365-drop-hint" role="status">
+              {holdNote}
+            </p>
+          )}
+          {dropFolder.error && (
+            <p className="d365-drop-hint d365-drop-hint-bad" role="status">
+              Shared folder unreachable — {dropFolder.error}
+            </p>
+          )}
+        </>
+      )}
+
       <div className="d365-upload-top">
         <div className="zone-head-text">
           <h3 className="zone-title">D365 batch data</h3>
           <p className="zone-desc">
-            Upload today&rsquo;s print run export (.csv) from Dynamics 365, or load the bundled
-            sample to walk through mapping and preview.
+            A CSV copied into the inbox folder is added to the log on its own. Choosing a
+            file here still opens a preview before anything is saved.
           </p>
         </div>
 
         <div className="d365-upload-aside">
-          {(pageBatches.length > 0 || feedback) && (
+          {(pageSessions.length > 0 || feedback) && (
             <div className="d365-upload-row">
-              {pageBatches.length > 0 ? (
+              {pageSessions.length > 0 ? (
                 <button
                   type="button"
                   className="btn btn-ghost d365-upload-btn"
-                  disabled={busy || clearing}
-                  onClick={runClearRun}
+                  disabled={busy}
+                  onClick={() => {
+                    setPendingRemoveId(null);
+                    setSheetsOpen((open) => !open);
+                  }}
                 >
-                  {clearing ? 'Clearing…' : 'Clear run'}
+                  {sheetsOpen ? 'Hide sheets' : 'Active sheets'}
+                  {hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ''}
                 </button>
               ) : (
                 <span className="d365-upload-btn-spacer" aria-hidden />
@@ -271,7 +342,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
             <button
               type="button"
               className="btn btn-primary d365-upload-btn"
-              disabled={busy || clearing}
+              disabled={busy}
               onClick={loadSampleExport}
             >
               {busy ? 'Loading…' : 'Load sample export'}
@@ -279,7 +350,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
             <button
               type="button"
               className="btn btn-ghost d365-upload-btn"
-              disabled={busy || clearing}
+              disabled={busy}
               onClick={() => fileRef.current?.click()}
             >
               Choose your file…
@@ -288,7 +359,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
               <button
                 type="button"
                 className="btn btn-ghost d365-upload-btn"
-                disabled={busy || clearing}
+                disabled={busy}
                 onClick={onOpenTestLabels}
               >
                 Test labels
@@ -314,6 +385,82 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
         />
       </div>
 
+      {sheetsOpen && pageSessions.length > 0 && (
+        <div className="d365-sheets">
+          <p className="d365-sheets-hint">
+            Uncheck a file to hide it from the live log — labels and checkouts stay. Remove
+            deletes it from this station so you can import that filename again. The audit
+            trail is kept either way.
+          </p>
+          <ul className="d365-sheets-list">
+            {pageSessions.map((session) => {
+              const sheetBatches = batches.filter((b) => b.importId === session.id);
+              const liveCount = sheetBatches.length;
+              const checkedOut = sheetBatches.filter((b) => b.status !== 'pending').length;
+              const confirming = pendingRemoveId === session.id;
+              return (
+                <li key={session.id} className="d365-sheets-row">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={session.active !== false}
+                      disabled={busy || confirming}
+                      onChange={() => void setImportActive(session.id, session.active === false)}
+                    />
+                    <span className="d365-sheets-name" title={session.filename}>
+                      {session.filename}
+                    </span>
+                    <span className="d365-sheets-meta">
+                      {liveCount} label{liveCount === 1 ? '' : 's'}
+                      {session.active === false ? ' · hidden' : ''}
+                    </span>
+                  </label>
+                  {confirming ? (
+                    <div className="d365-sheets-confirm">
+                      <p>
+                        Remove <strong>{session.filename}</strong> from this station?{' '}
+                        {liveCount} label{liveCount === 1 ? '' : 's'} leave the log
+                        {checkedOut > 0
+                          ? ` (${checkedOut} already checked out)`
+                          : ''}
+                        . You can import this file again.
+                      </p>
+                      <div className="d365-sheets-confirm-actions">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          disabled={busy}
+                          onClick={() => setPendingRemoveId(null)}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-danger btn-sm"
+                          disabled={busy}
+                          onClick={() => confirmRemoveSheet(session.id)}
+                        >
+                          {busy ? 'Removing…' : 'Remove file'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm d365-sheets-remove"
+                      disabled={busy || pendingRemoveId !== null}
+                      onClick={() => setPendingRemoveId(session.id)}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       {error && <div className="upload-error">{error}</div>}
 
       {importOpen && pendingFile && (
@@ -326,10 +473,11 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
           {step === 'mapping' && (
             <>
               <p className="d365-mapping-hint">
-                Match your D365 export columns to app fields. For the standard Dynamics export,
-                <strong> Production</strong> → Batch, <strong>Label</strong> → Label code,{' '}
-                <strong>Split</strong> → per-run size (blank = one run),{' '}
-                <strong>Delivery</strong> → delivery date (not expiration).
+                Use this when the export layout changed or the preview looks wrong. For the
+                standard Dynamics export, <strong>Production</strong> → Batch,{' '}
+                <strong>Label</strong> → Label code, <strong>Split</strong> → per-run size
+                (blank = one run), <strong>Delivery</strong> → delivery date (not expiration).
+                Confirming an import saves this layout for next time.
               </p>
               <table className="d365-mapping-table">
                 <thead>
@@ -380,6 +528,13 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
 
           {step === 'preview' && analysis && (
             <>
+              {layoutGuessed && (
+                <p className="d365-mapping-hint">
+                  This file does not match the saved column layout, so columns were guessed.
+                  Check the preview, or edit column mapping if a field landed in the wrong place.
+                </p>
+              )}
+
               <div className="d365-preview-summary">
                 <span>
                   <strong>{analysis.stats.sourceOrders}</strong> order
@@ -499,9 +654,12 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
                 <button
                   type="button"
                   className="btn btn-ghost"
-                  onClick={() => setStep('mapping')}
+                  onClick={() => {
+                    setLayoutGuessed(false);
+                    setStep('mapping');
+                  }}
                 >
-                  Back to mapping
+                  Edit column mapping
                 </button>
                 <button
                   type="button"

@@ -54,12 +54,7 @@ export function BadgeGate({ notice, onOpenAdmin }: BadgeGateProps) {
               Choose your profile — recorded in the audit trail as a manual sign-in
             </div>
             {operators.length === 0 ? (
-              <div className="manual-signin-empty">
-                No users enrolled yet.
-                <button className="btn btn-ghost" onClick={onOpenAdmin}>
-                  Open Admin to enroll
-                </button>
-              </div>
+              <div className="manual-signin-empty">No users enrolled yet.</div>
             ) : (
               <div className="profile-list">
                 {profiles.map((op) => (
@@ -76,9 +71,18 @@ export function BadgeGate({ notice, onOpenAdmin }: BadgeGateProps) {
                 ))}
               </div>
             )}
-            <button className="btn btn-ghost btn-sm" onClick={() => setManualOpen(false)}>
-              Hide
-            </button>
+            {/* Always reachable, not just when the roster is empty. A station
+                whose only enrolled person is an operator would otherwise have
+                no route into Admin to promote anyone, and no badge reader to
+                trigger the unknown-badge path either. */}
+            <div className="manual-signin-actions">
+              <button className="btn btn-ghost btn-sm" onClick={() => setManualOpen(false)}>
+                Hide
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={onOpenAdmin}>
+                {operators.length === 0 ? 'Open Admin to enroll' : 'Supervisor — open Admin'}
+              </button>
+            </div>
           </div>
         ) : (
           <button className="manual-signin-toggle" onClick={() => setManualOpen(true)}>

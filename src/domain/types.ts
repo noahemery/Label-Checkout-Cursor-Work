@@ -53,6 +53,13 @@ export interface ImportSession {
   importedAt: string;
   /** Rows added during this import (snapshot at import time). */
   labelCount: number;
+  /**
+   * On the live batch log. False hides the CSV from operators without deleting
+   * the rows — checkouts, mismatches and the audit trail stay in SQLite.
+   * Removing the session (D365 panel → Remove) deletes the rows; the audit
+   * trail still stays.
+   */
+  active: boolean;
 }
 
 /** Badge-in profile — admins see full tools; operators get a minimal checkout screen. */
@@ -83,6 +90,9 @@ export type AuditType =
   | 'batch_add'
   | 'batch_delete'
   | 'csv_import'
+  | 'import_hidden'
+  | 'import_shown'
+  | 'import_deleted'
   | 'page_select'
   | 'sheet_photo'
   | 'sheet_reset';

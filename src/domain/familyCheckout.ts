@@ -21,11 +21,40 @@ import type { Batch } from './types';
 
 export type FamilyCheckoutPhase = 'scanning' | 'complete';
 
+/**
+ * How each half of the label side reached the station. A label printed
+ * without a QR has its batch number on a 1D barcode and its label code only
+ * as printed text, so the code is typed.
+ */
+export interface LabelEntry {
+  batch: 'qr' | 'barcode' | 'typed' | null;
+  code: 'qr' | 'typed' | null;
+}
+
+export function emptyLabelEntry(): LabelEntry {
+  return { batch: null, code: null };
+}
+
+/** True when any part of the label side was not read from a QR. */
+export function isKeyedEntry(entry: LabelEntry): boolean {
+  return entry.batch !== 'qr' || entry.code !== 'qr';
+}
+
+/** Audit suffix for a member that was not checked by its QR, or '' when it was. */
+export function keyedEntrySuffix(entry: LabelEntry): string {
+  if (!isKeyedEntry(entry)) return '';
+  const batch = entry.batch === 'barcode' ? 'batch by barcode' : `batch ${entry.batch ?? 'unknown'}`;
+  const code = entry.code === 'typed' ? 'label code typed' : `label code ${entry.code ?? 'unknown'}`;
+  return ` [no QR — ${batch}, ${code}]`;
+}
+
 export interface FamilyMemberPair {
   batchId: string;
   batchNumber: string;
   /** Read off the printed label. */
   label: SideData;
+  /** How the label side was entered. */
+  entry: LabelEntry;
   /** Built from the D365 record for this member — never operator input. */
   expected: SideData;
   result: MatchResult;
@@ -63,12 +92,17 @@ export function batchIsCheckable(batch: Batch): boolean {
   return !!batch.batchNumber && !!batch.labelCode;
 }
 
-export function memberPairFromLabelScan(batch: Batch, label: SideData): FamilyMemberPair {
+export function memberPairFromLabelScan(
+  batch: Batch,
+  label: SideData,
+  entry: LabelEntry,
+): FamilyMemberPair {
   const expected = dbSideFromBatch(batch);
   return {
     batchId: batch.id,
     batchNumber: batch.batchNumber,
     label,
+    entry,
     expected,
     result: compareSides(label, expected),
   };

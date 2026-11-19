@@ -1,6 +1,6 @@
 [package]
 name = "label-verification"
-version = "0.1.0"
+version = "0.4.4"
 description = "Label Verification System — floor checkout station"
 authors = ["Alltech"]
 license = ""
@@ -24,3 +24,4 @@ log = "0.4"
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+serialport = "4.7"

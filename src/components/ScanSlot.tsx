@@ -1,5 +1,39 @@
+import type { ReactNode } from 'react';
 import type { SideData } from '../domain/matching';
 import { sideComplete } from '../domain/matching';
+import { Es } from './Es';
+
+/** The batch came in without a QR, so the label code has to be read off the print. */
+function NeedCode() {
+  return (
+    <div className="slot-need-code">
+      Type the label code printed on the label (e.g. US0.18 V2), then press ENTER
+      <Es>Escriba el código de etiqueta impreso (ej. US0.18 V2) y presione ENTER</Es>
+    </div>
+  );
+}
+
+function NeedBatch() {
+  return (
+    <div className="slot-need-code">
+      Now scan the BATCH NUMBER barcode at the bottom of the label
+      <Es>Ahora escanee el código de barras del NÚMERO DE LOTE en la parte inferior</Es>
+    </div>
+  );
+}
+
+function NoQrHint() {
+  return (
+    <p className="slot-noqr-hint">
+      No QR code? Scan the BATCH NUMBER barcode at the bottom, then type the label code and press
+      ENTER.
+      <Es>
+        ¿Sin código QR? Escanee el código de barras del NÚMERO DE LOTE abajo, luego escriba el
+        código de etiqueta y presione ENTER.
+      </Es>
+    </p>
+  );
+}
 
 export type SlotVisualPhase = 'active' | 'complete' | 'locked';
 
@@ -66,15 +100,15 @@ function BarcodeIcon() {
 
 interface ScanSlotProps {
   step: 1 | 2;
-  title: string;
-  subtitle: string;
+  title: ReactNode;
+  subtitle: ReactNode;
   side: SideData;
   activeNeed: 'batch' | 'code' | null;
   typedBuffer: string;
   visualPhase: SlotVisualPhase;
-  inlinePrimary?: string;
-  inlineSub?: string;
-  lockedHint?: string;
+  inlinePrimary?: ReactNode;
+  inlineSub?: ReactNode;
+  lockedHint?: ReactNode;
   hideStepBadge?: boolean;
 }
 
@@ -135,7 +169,10 @@ export function ScanSlot({
           <div className="slot-typing">
             {typedBuffer}
             <span className="slot-caret" />
-            <div className="slot-typing-hint">press ENTER when done</div>
+            <div className="slot-typing-hint">
+              press ENTER when done
+              <Es>presione ENTER al terminar</Es>
+            </div>
           </div>
         ) : side.batchNumber ? (
           <>
@@ -143,23 +180,21 @@ export function ScanSlot({
             {side.labelCode ? (
               <div className="slot-labelcode">{side.labelCode}</div>
             ) : (
-              visualPhase === 'active' && (
-                <div className="slot-need-code">Scan the QR code on the printed label</div>
-              )
+              visualPhase === 'active' && <NeedCode />
             )}
             <div className="slot-meta">
               {side.itemNumber && <span>Item {side.itemNumber}</span>}
               <span className={side.knownBatch ? 'tag tag-known' : 'tag tag-unknown'}>
-                {side.knownBatch ? 'in today\u2019s list' : 'NOT in today\u2019s list'}
+                {side.knownBatch
+                  ? 'in today\u2019s list (en la lista de hoy)'
+                  : 'NOT in today\u2019s list (NO está en la lista de hoy)'}
               </span>
             </div>
           </>
         ) : side.labelCode ? (
           <>
             <div className="slot-labelcode">{side.labelCode}</div>
-            {visualPhase === 'active' && (
-              <div className="slot-need-code">Scan the QR code on the printed label</div>
-            )}
+            {visualPhase === 'active' && <NeedBatch />}
           </>
         ) : visualPhase === 'active' ? (
           <div className="slot-scan-prompt">
@@ -171,6 +206,7 @@ export function ScanSlot({
             </div>
             {inlinePrimary && <p className="slot-instruction-primary">{inlinePrimary}</p>}
             {inlineSub ? <p className="slot-instruction-sub">{inlineSub}</p> : null}
+            {step === 1 && <NoQrHint />}
           </div>
         ) : null}
       </div>

@@ -54,8 +54,8 @@ export function TestLabelsDrawer({ open, onClose }: TestLabelsDrawerProps) {
           <div>
             <h2>Test labels</h2>
             <p className="test-labels-sub">
-              Synthetic LBL QRs from imported data — scan with the Zebra like printed labels. Open an
-              order and scan its on-screen REF first.
+              Synthetic printed-label QRs from imported data — scan with the Zebra like the
+              real roll. Open an order first, then scan the match QR for that batch.
             </p>
           </div>
           <button className="btn btn-ghost" onClick={onClose}>

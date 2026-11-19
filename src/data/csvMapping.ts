@@ -2,7 +2,7 @@ import Papa from 'papaparse';
 import { batchBaseNumber, hasMalformedRunSuffix, splitSuffix } from '../domain/batchFamily';
 import { normalizeId } from '../domain/normalize';
 import { computeRunQuantities, formatRunsSummary } from '../domain/splitRuns';
-import type { BatchInput } from './DataStore';
+import type { BatchInput, DataStore } from './DataStore';
 
 export type CsvField = keyof Omit<BatchInput, 'source' | 'sheetPageId' | 'orderTotalQty' | 'importId'>;
 
@@ -58,22 +58,69 @@ export type ColumnMapping = Partial<Record<CsvField, string>>;
 
 const MAPPING_STORAGE_KEY = 'lvs-csv-column-mapping';
 
-export function loadSavedColumnMapping(): ColumnMapping {
+function parseMapping(raw: string | null): ColumnMapping | null {
+  if (!raw) return null;
   try {
-    const raw = localStorage.getItem(MAPPING_STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as ColumnMapping;
+    return JSON.parse(raw) as ColumnMapping;
   } catch {
-    /* ignore */
+    return null;
   }
-  return {};
 }
 
-export function saveColumnMapping(mapping: ColumnMapping): void {
-  localStorage.setItem(MAPPING_STORAGE_KEY, JSON.stringify(mapping));
+/**
+ * The saved layout lives in the store's settings, not localStorage, because
+ * localStorage belongs to one Windows account and the inbox needs the layout
+ * under whichever login is running the station. A layout saved by an older
+ * build is copied over the first time it is read.
+ */
+export async function loadSavedColumnMapping(store: DataStore): Promise<ColumnMapping> {
+  const stored = parseMapping(await store.getSetting(MAPPING_STORAGE_KEY));
+  if (stored) return stored;
+  const raw = localStorage.getItem(MAPPING_STORAGE_KEY);
+  const legacy = parseMapping(raw);
+  if (!legacy || !raw) return {};
+  await store.setSetting(MAPPING_STORAGE_KEY, raw);
+  return legacy;
+}
+
+export async function saveColumnMapping(store: DataStore, mapping: ColumnMapping): Promise<void> {
+  const raw = JSON.stringify(mapping);
+  await store.setSetting(MAPPING_STORAGE_KEY, raw);
+  localStorage.setItem(MAPPING_STORAGE_KEY, raw);
 }
 
 function normalizeHeader(header: string): string {
   return header.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+export type MappingSource = 'saved' | 'detected' | 'unmapped';
+
+/**
+ * Pick the column layout for a file.
+ *
+ * A saved mapping is the station's usual D365 export. It wins whenever its
+ * batch column is still in the file, so the same spreadsheet imports the same
+ * way every time. Auto-detect is the fallback for a first import or a file
+ * whose headers no longer match. `unmapped` means even the batch column could
+ * not be found — that is the only case that has to open the mapping screen.
+ */
+export function mappingForHeaders(
+  headers: string[],
+  saved: ColumnMapping,
+): { mapping: ColumnMapping; source: MappingSource } {
+  const present = new Set(headers);
+  if (saved.batchNumber && present.has(saved.batchNumber)) {
+    const mapping: ColumnMapping = {};
+    for (const field of Object.keys(CSV_FIELD_LABELS) as CsvField[]) {
+      const header = saved[field];
+      if (header && present.has(header)) mapping[field] = header;
+    }
+    return { mapping, source: 'saved' };
+  }
+
+  const detected = autoDetectMapping(headers);
+  if (detected.batchNumber) return { mapping: detected, source: 'detected' };
+  return { mapping: detected, source: 'unmapped' };
 }
 
 export function autoDetectMapping(headers: string[]): ColumnMapping {

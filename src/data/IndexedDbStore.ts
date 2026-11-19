@@ -4,7 +4,15 @@ import { normalizeId } from '../domain/normalize';
 import { buildReferenceQrPayload } from '../domain/referenceQr';
 import { newId, nowIso } from '../domain/types';
 import type { AuditEvent, Batch, ImportSession, Operator, UserRole } from '../domain/types';
-import type { AuditInput, BatchInput, DataStore, ImportMeta, ImportResult } from './DataStore';
+import type {
+  AuditInput,
+  BatchInput,
+  DataStore,
+  DeleteImportResult,
+  ImportMeta,
+  ImportResult,
+} from './DataStore';
+import type { RosterImportResult } from './roster';
 
 interface LvsDb extends DBSchema {
   batches: {
@@ -33,7 +41,7 @@ export class IndexedDbStore implements DataStore {
   private dbPromise: Promise<IDBPDatabase<LvsDb>>;
 
   constructor() {
-    this.dbPromise = openDB<LvsDb>('label-verification', 10, {
+    this.dbPromise = openDB<LvsDb>('label-verification', 11, {
       async upgrade(db, oldVersion, _newVersion, transaction) {
         if (oldVersion < 1) {
           const batches = db.createObjectStore('batches', { keyPath: 'id' });
@@ -122,6 +130,15 @@ export class IndexedDbStore implements DataStore {
             }
           }
         }
+        if (oldVersion < 11 && db.objectStoreNames.contains('importSessions')) {
+          const sessions = transaction.objectStore('importSessions');
+          const all = await sessions.getAll();
+          for (const session of all) {
+            if (session.active === undefined) {
+              await sessions.put({ ...session, active: true });
+            }
+          }
+        }
       },
     });
   }
@@ -188,6 +205,7 @@ export class IndexedDbStore implements DataStore {
       filename: meta?.filename ?? 'import.csv',
       importedAt: nowIso(),
       labelCount: 0,
+      active: true,
     };
 
     let added = 0;
@@ -219,13 +237,41 @@ export class IndexedDbStore implements DataStore {
   async getImportSessions(): Promise<ImportSession[]> {
     const db = await this.dbPromise;
     const all = await db.getAll('importSessions');
-    return all.sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+    return all
+      .map((s) => ({ ...s, active: s.active !== false }))
+      .sort((a, b) => b.importedAt.localeCompare(a.importedAt));
   }
 
   async getImportSessionsForPage(pageId: string): Promise<ImportSession[]> {
     const db = await this.dbPromise;
     const all = await db.getAllFromIndex('importSessions', 'byPageId', pageId);
-    return all.sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+    return all
+      .map((s) => ({ ...s, active: s.active !== false }))
+      .sort((a, b) => b.importedAt.localeCompare(a.importedAt));
+  }
+
+  async setImportSessionActive(importId: string, active: boolean): Promise<void> {
+    const db = await this.dbPromise;
+    const session = await db.get('importSessions', importId);
+    if (!session) throw new Error(`Import session ${importId} not found`);
+    await db.put('importSessions', { ...session, active });
+  }
+
+  async deleteImportSession(importId: string): Promise<DeleteImportResult> {
+    const db = await this.dbPromise;
+    const session = await db.get('importSessions', importId);
+    if (!session) throw new Error(`Import session ${importId} not found`);
+
+    const onPage = await db.getAll('batches');
+    let deleted = 0;
+    for (const batch of onPage) {
+      if (batch.importId === importId) {
+        await db.delete('batches', batch.id);
+        deleted++;
+      }
+    }
+    await db.delete('importSessions', importId);
+    return { filename: session.filename, deleted };
   }
 
   private async updateBatch(batchId: string, patch: Partial<Batch>): Promise<Batch> {
@@ -320,6 +366,34 @@ export class IndexedDbStore implements DataStore {
   async removeOperator(operatorId: string): Promise<void> {
     const db = await this.dbPromise;
     await db.delete('operators', operatorId);
+  }
+
+  async upsertOperators(operators: Operator[]): Promise<RosterImportResult> {
+    const db = await this.dbPromise;
+    let added = 0;
+    let updated = 0;
+    let unchanged = 0;
+
+    for (const incoming of operators) {
+      const badgeIdNorm = normalizeId(incoming.badgeIdNorm);
+      const existing = await db.getFromIndex('operators', 'byBadgeIdNorm', badgeIdNorm);
+
+      if (!existing) {
+        await db.put('operators', { ...incoming, badgeIdNorm });
+        added++;
+        continue;
+      }
+      // Keep the local id: audit rows already written here point at it, and
+      // rewriting it would orphan them.
+      if (existing.name === incoming.name && (existing.role ?? 'operator') === incoming.role) {
+        unchanged++;
+        continue;
+      }
+      await db.put('operators', { ...existing, name: incoming.name, role: incoming.role });
+      updated++;
+    }
+
+    return { added, updated, unchanged };
   }
 
   // ---- Audit ---------------------------------------------------------

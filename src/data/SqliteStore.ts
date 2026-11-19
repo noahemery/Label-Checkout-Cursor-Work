@@ -1,16 +1,27 @@
+import { invoke } from '@tauri-apps/api/core';
 import Database from '@tauri-apps/plugin-sql';
 import { normalizeId } from '../domain/normalize';
 import { buildReferenceQrPayload } from '../domain/referenceQr';
 import { newId, nowIso } from '../domain/types';
 import type { AuditEvent, Batch, ImportSession, Operator, UserRole } from '../domain/types';
-import type { AuditInput, BatchInput, DataStore, ImportMeta, ImportResult } from './DataStore';
+import type {
+  AuditInput,
+  BatchInput,
+  DataStore,
+  DeleteImportResult,
+  ImportMeta,
+  ImportResult,
+} from './DataStore';
+import { DB_MIGRATED_KEY } from './dataLocation';
+import type { RosterImportResult } from './roster';
 import { SCHEMA_STATEMENTS, SCHEMA_VERSION, WAL_PRAGMA } from './sqliteSchema';
 
 /**
  * SQLite-backed DataStore for the desktop build.
  *
- * The file lives in the Tauri app data directory, so backing the station up is
- * copying one file. Bind placeholders are `$1`-style, which is what the SQLite
+ * The file lives in %ProgramData%\LabelVerification, shared by every Windows
+ * account on the machine, so a different login sees the same batches, roster
+ * and audit trail. Bind placeholders are `$1`-style, which is what the SQLite
  * driver behind tauri-plugin-sql expects.
  *
  * Writes are ordered so a failure part way through leaves recoverable state
@@ -18,7 +29,36 @@ import { SCHEMA_STATEMENTS, SCHEMA_VERSION, WAL_PRAGMA } from './sqliteSchema';
  * owns, and both import and page-wipe are safe to run again.
  */
 
-const DB_FILE = 'sqlite:label-verification.db';
+/** Resolved by tauri-plugin-sql against this account's app config dir — the 0.4.3-and-earlier location. */
+const LEGACY_DB_URL = 'sqlite:label-verification.db';
+
+interface DataLocation {
+  dir: string;
+  dbPath: string;
+  dbExists: boolean;
+  migratingPath: string;
+  legacyDbPath: string;
+  legacyExists: boolean;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Copy this account's old database into the shared folder. Only runs when the
+ * shared one does not exist yet, so whichever account launches 0.4.4 first
+ * seeds it and later accounts join it. The old file is left untouched.
+ */
+async function copyLegacyDatabase(location: DataLocation): Promise<void> {
+  const legacy = await Database.load(LEGACY_DB_URL);
+  try {
+    await legacy.execute(`VACUUM INTO $1`, [location.migratingPath]);
+  } finally {
+    await legacy.close().catch(() => null);
+  }
+  await invoke('promote_migrated_db');
+}
 
 interface BatchRow {
   id: string;
@@ -51,6 +91,7 @@ interface ImportSessionRow {
   filename: string;
   imported_at: string;
   label_count: number;
+  active: number;
 }
 
 interface OperatorRow {
@@ -105,6 +146,7 @@ function toImportSession(r: ImportSessionRow): ImportSession {
     filename: r.filename,
     importedAt: r.imported_at,
     labelCount: r.label_count,
+    active: r.active !== 0,
   };
 }
 
@@ -195,25 +237,66 @@ const INSERT_BATCH_PLACEHOLDERS = Array.from({ length: 22 }, (_, i) => `$${i + 1
 
 export class SqliteStore implements DataStore {
   private readonly db: Database;
+  readonly databasePath: string;
 
-  private constructor(db: Database) {
+  private constructor(db: Database, databasePath: string) {
     this.db = db;
+    this.databasePath = databasePath;
   }
 
-  /** Open the database file and bring the schema up to date. */
+  /** Open the shared database file and bring the schema up to date. */
   static async open(): Promise<SqliteStore> {
-    const db = await Database.load(DB_FILE);
+    let location: DataLocation;
+    try {
+      location = await invoke<DataLocation>('shared_data_dir');
+    } catch (err) {
+      throw new Error(errorText(err), { cause: err });
+    }
+
+    let migratedFrom: string | null = null;
+    if (!location.dbExists && location.legacyExists) {
+      try {
+        await copyLegacyDatabase(location);
+      } catch (err) {
+        throw new Error(
+          `Could not copy this account's existing data from ${location.legacyDbPath} into ` +
+            `${location.dbPath}. Nothing was changed; the original file is still there. (${errorText(err)})`,
+          { cause: err },
+        );
+      }
+      migratedFrom = location.legacyDbPath;
+    }
+
+    const db = await Database.load(`sqlite:${location.dbPath}`);
     // journal_mode returns a row, so this has to be select, not execute.
     await db.select(WAL_PRAGMA);
     for (const statement of SCHEMA_STATEMENTS) {
       await db.execute(statement);
     }
+
+    const versionRows = await db.select<{ value: string }[]>(
+      `SELECT value FROM schema_meta WHERE key = 'schema_version' LIMIT 1`,
+    );
+    const fromVersion = Number(versionRows[0]?.value ?? '0');
+    if (fromVersion < 2) {
+      const cols = await db.select<{ name: string }[]>(`PRAGMA table_info(import_sessions)`);
+      if (!cols.some((c) => c.name === 'active')) {
+        await db.execute(
+          `ALTER TABLE import_sessions ADD COLUMN active INTEGER NOT NULL DEFAULT 1`,
+        );
+      }
+    }
+
     await db.execute(
       `INSERT INTO schema_meta (key, value) VALUES ('schema_version', $1)
          ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
       [String(SCHEMA_VERSION)],
     );
-    return new SqliteStore(db);
+    const store = new SqliteStore(db, location.dbPath);
+    if (migratedFrom) {
+      await store.setSetting(DB_MIGRATED_KEY, JSON.stringify({ from: migratedFrom, at: nowIso() }));
+    }
+    return store;
   }
 
   // ---- Batches -------------------------------------------------------
@@ -276,8 +359,8 @@ export class SqliteStore implements DataStore {
   ): Promise<ImportResult> {
     const importId = newId();
     await this.db.execute(
-      `INSERT INTO import_sessions (id, page_id, filename, imported_at, label_count)
-         VALUES ($1, $2, $3, $4, 0)`,
+      `INSERT INTO import_sessions (id, page_id, filename, imported_at, label_count, active)
+         VALUES ($1, $2, $3, $4, 0, 1)`,
       [importId, pageId, meta?.filename ?? 'import.csv', nowIso()],
     );
 
@@ -311,7 +394,7 @@ export class SqliteStore implements DataStore {
 
   async getImportSessions(): Promise<ImportSession[]> {
     const rows = await this.db.select<ImportSessionRow[]>(
-      `SELECT id, page_id, filename, imported_at, label_count
+      `SELECT id, page_id, filename, imported_at, label_count, active
          FROM import_sessions ORDER BY imported_at DESC`,
     );
     return rows.map(toImportSession);
@@ -319,7 +402,7 @@ export class SqliteStore implements DataStore {
 
   async getImportSessionsForPage(pageId: string): Promise<ImportSession[]> {
     const rows = await this.db.select<ImportSessionRow[]>(
-      `SELECT id, page_id, filename, imported_at, label_count
+      `SELECT id, page_id, filename, imported_at, label_count, active
          FROM import_sessions WHERE page_id = $1 ORDER BY imported_at DESC`,
       [pageId],
     );
@@ -350,6 +433,27 @@ export class SqliteStore implements DataStore {
   async flagRow(batchId: string): Promise<Batch> {
     await this.db.execute(`UPDATE batches SET status = 'flagged' WHERE id = $1`, [batchId]);
     return this.getBatchById(batchId);
+  }
+
+  async setImportSessionActive(importId: string, active: boolean): Promise<void> {
+    await this.db.execute(`UPDATE import_sessions SET active = $1 WHERE id = $2`, [
+      active ? 1 : 0,
+      importId,
+    ]);
+  }
+
+  async deleteImportSession(importId: string): Promise<DeleteImportResult> {
+    const sessions = await this.db.select<ImportSessionRow[]>(
+      `SELECT id, page_id, filename, imported_at, label_count, active
+         FROM import_sessions WHERE id = $1`,
+      [importId],
+    );
+    if (!sessions[0]) throw new Error(`Import session ${importId} not found`);
+
+    // Batches first so a failure cannot leave rows whose session is already gone.
+    const result = await this.db.execute(`DELETE FROM batches WHERE import_id = $1`, [importId]);
+    await this.db.execute(`DELETE FROM import_sessions WHERE id = $1`, [importId]);
+    return { filename: sessions[0].filename, deleted: result.rowsAffected };
   }
 
   async deleteBatch(batchId: string): Promise<void> {
@@ -404,7 +508,7 @@ export class SqliteStore implements DataStore {
     } catch (err) {
       // The unique index is the real guard — the check above only improves the message.
       const again = await this.getOperatorByBadge(badgeId);
-      if (again) throw new Error(`Badge already enrolled to ${again.name}`);
+      if (again) throw new Error(`Badge already enrolled to ${again.name}`, { cause: err });
       throw err;
     }
     return operator;
@@ -422,6 +526,41 @@ export class SqliteStore implements DataStore {
 
   async removeOperator(operatorId: string): Promise<void> {
     await this.db.execute(`DELETE FROM operators WHERE id = $1`, [operatorId]);
+  }
+
+  async upsertOperators(operators: Operator[]): Promise<RosterImportResult> {
+    let added = 0;
+    let updated = 0;
+    let unchanged = 0;
+
+    for (const incoming of operators) {
+      const badgeIdNorm = normalizeId(incoming.badgeIdNorm);
+      const existing = await this.getOperatorByBadge(badgeIdNorm);
+
+      if (!existing) {
+        await this.db.execute(
+          `INSERT INTO operators (id, badge_id_norm, name, role, created_at)
+             VALUES ($1, $2, $3, $4, $5)`,
+          [incoming.id, badgeIdNorm, incoming.name, incoming.role, incoming.createdAt],
+        );
+        added++;
+        continue;
+      }
+      // Keep the local id: audit rows already written here point at it, and
+      // rewriting it would orphan them.
+      if (existing.name === incoming.name && existing.role === incoming.role) {
+        unchanged++;
+        continue;
+      }
+      await this.db.execute(`UPDATE operators SET name = $1, role = $2 WHERE id = $3`, [
+        incoming.name,
+        incoming.role,
+        existing.id,
+      ]);
+      updated++;
+    }
+
+    return { added, updated, unchanged };
   }
 
   // ---- Audit ---------------------------------------------------------
@@ -472,5 +611,24 @@ export class SqliteStore implements DataStore {
            updated_at = excluded.updated_at`,
       [key, value, nowIso()],
     );
+  }
+
+  // ---- Backup --------------------------------------------------------
+
+  /**
+   * `VACUUM INTO` is the only correct way to copy a live SQLite database.
+   *
+   * Copying the file by hand while the app is running gives you whatever was
+   * flushed at that instant and leaves the WAL behind, so the copy can be torn
+   * or stale. `VACUUM INTO` writes a complete, already-checkpointed database
+   * that opens cleanly on its own — and it does it without locking the station
+   * out of scanning.
+   *
+   * SQLite refuses to overwrite an existing target. That is a feature here: it
+   * makes one backup per filename idempotent, so a daily snapshot can be
+   * attempted on every launch and quietly do nothing the second time.
+   */
+  async snapshotTo(absolutePath: string): Promise<void> {
+    await this.db.execute(`VACUUM INTO $1`, [absolutePath]);
   }
 }
