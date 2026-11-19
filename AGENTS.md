@@ -17,43 +17,59 @@ npm run desktop       # Tauri window + SQLite — this is how the station runs
 npm run desktop:build # NSIS installer under src-tauri/target/release/bundle
 npm run dev           # Vite in a browser (IndexedDB) — development without the desktop shell
 npm run build         # tsc -b && vite build
-npm run lint          # eslint .
+npm run lint          # eslint . — 0 errors required
+npm test              # Vitest, once (npm run test:watch while working)
 
 cargo test --manifest-path src-tauri/Cargo.toml --lib   # the Rust commands
 ```
 
-**There is no test framework on the TypeScript side.** No runner, no test files, no testing
-dependency in `package.json`. Never treat a passing `npm run build` as evidence that behaviour
-is preserved.
+### The gates
 
-The **Rust side does have tests** — `cargo test --manifest-path src-tauri/Cargo.toml --lib`
-covers [drop_folder.rs](src-tauri/src/drop_folder.rs) against real files in a temp directory.
-That is the only green regression gate in the repo, and it only reaches the Rust commands.
+All four must pass locally before you push, and CI runs the same four on every push and PR:
+`npm run lint`, `npm test`, `npm run build`, and the cargo tests.
 
-**`npm run build` passes. `npm run lint` currently fails** with 19 errors and 3 warnings, all
-pre-existing — so a red lint run is *not* a signal that you broke something. Compare against the
-baseline below before assuming your change caused a failure:
-
-- 9 × `react-hooks/refs` — refs written/read during render (`useVerification.ts:94,96`,
-  `useWedgeCapture.ts:57`, `AppDataContext.tsx:29,30,76`, `App.tsx:121,122,139`)
-- 4 × `react-hooks/set-state-in-effect` (`App.tsx:45`, `useWedgeCapture.ts:135`,
-  `AdminModal.tsx:30`, `D365UploadPanel.tsx:44`)
-- 4 × `react-refresh/only-export-components` — the context files export hooks beside providers
-- 1 × `preserve-caught-error` (`IndexedDbStore.ts:207`), 1 × `no-useless-assignment`
-  (`payloads.ts:81`)
-
-These come from `eslint-plugin-react-hooks` v7 rules that postdate the code; none is a behavior
-defect. Build is the only currently-green gate.
+- **Vitest** covers the pure domain rules in `src/domain/*.test.ts`: prefix label-code matching,
+  `compareSides`, `memberPairFromLabelScan` refusing to fill a missing label code, payload
+  parsing (printed roll, legacy `LBL|`, stray `REF|`, unsupported versions, badges), the
+  expiration-date and GTIN heuristics, split runs, and the no-QR audit suffix. Tests sit next to
+  the file they cover. **Any change to a rule in `src/domain` comes with a test.**
+- **It does not cover** the `useVerification` hook (run order, the badge sign-off, the single
+  writer), React components, the stores, or anything that needs the Tauri runtime. Those are
+  still verified by running the app — see **Testing without printed labels**.
+- **Cargo tests** cover [drop_folder.rs](src-tauri/src/drop_folder.rs),
+  [data_location.rs](src-tauri/src/data_location.rs) and [scanner.rs](src-tauri/src/scanner.rs)
+  against real files in a temp directory.
+- **Lint has 0 errors and 27 known warnings.** Three rule families that arrived with
+  `eslint-plugin-react-hooks` v7 after the code was written are set to `warn` in
+  [eslint.config.js](eslint.config.js) so lint can gate CI on everything else:
+  `react-hooks/refs` (12), `react-hooks/set-state-in-effect` (10),
+  `react-refresh/only-export-components` (5 — context files export hooks beside providers).
+  None is a behavior defect. A new warning in those families is still worth avoiding; the
+  `refs` ones in `useVerification.ts` sit on the core control, so do not "fix" them casually.
+  `src-tauri/target` is ignored — it is Rust build output.
 
 ## Git workflow
 
-- **Commit at a working stopping point, push to `work`. Never push to `main`.** `main` only
-  moves by merging a pull request from `work`, after the change has been tried on the station.
-- [ci.yml](.github/workflows/ci.yml) runs `npm run build` and the Rust tests on every push. Run
-  both locally before pushing so the run is not the first time anyone finds out.
-- [release.yml](.github/workflows/release.yml) builds the NSIS installer into a **draft** GitHub
-  Release when a `v*` tag is pushed. The tag must equal `version` in
-  [tauri.conf.json](src-tauri/tauri.conf.json) (and `Cargo.toml`) — bump those first, then tag.
+**Short-lived branches, one change each, into `main` by pull request.**
+
+- `main` is protected on GitHub: no direct pushes, a PR is required, the `build-and-test` CI
+  check must pass on a branch that is up to date with `main`, history is linear, and `main`
+  cannot be force-pushed or deleted. The repo only allows **squash merges** and deletes the
+  branch after merge, so each PR lands as one commit.
+- Start every change from an up-to-date `main`: `git switch main && git pull`, then
+  `git switch -c <type>/<short-name>`. Types: `feat/`, `fix/`, `chore/` (tooling, deps),
+  `docs/`, `ci/`. One concern per branch — do not fold an unrelated fix into it.
+- Commit at working stopping points with a message that says what changed for the operator or
+  supervisor. Push the branch and open a PR into `main`; it fills in
+  [the PR template](.github/pull_request_template.md). The PR title becomes the commit on `main`.
+- A PR that changes behavior on the floor is tried on a station (`npm run desktop`, or the
+  installed build) before it merges, and the PR says what was tried.
+- **Releases are cut from `main` only.** Bump `version` in
+  [tauri.conf.json](src-tauri/tauri.conf.json) and `Cargo.toml` in a PR, merge it, then tag the
+  merge commit: `git switch main && git pull && git tag vX.Y.Z && git push origin vX.Y.Z`.
+  [release.yml](.github/workflows/release.yml) refuses a tag that does not equal the version,
+  and builds the NSIS installer into a **draft** GitHub Release for a person to publish.
+- The long-lived `work` branch is retired once PR #1 merges. Do not recreate it.
 - **The GitHub repo is public.** `Test_Data/` (real D365 exports and FMLB forms), `LVS Vault/`
   (internal notes) and `Hardware/` (vendor manuals) are in `.gitignore` and stay out of git.
   Do not force-add them, and check `git status` for anything else internal before pushing.
@@ -97,8 +113,11 @@ What must not regress:
 - **Never commit batch status from the scanning path.** `confirmOrderWithBadge` is the only
   writer, and the only caller of `store.verifyRow` / `store.flagRow` for checkout.
 
-No test will catch a regression in any of these — there are no tests. If a refactor appears to
-need one of them, stop and ask.
+[familyCheckout.test.ts](src/domain/familyCheckout.test.ts) and
+[matching.test.ts](src/domain/matching.test.ts) pin the first rule at the domain level. The run
+order and single-writer rules live in the `useVerification` hook, which has no test — a
+regression there is only caught by running the app. If a refactor appears to need any of them
+changed, stop and ask.
 
 ### Labels without a QR
 
@@ -149,12 +168,12 @@ append-only, so this adds a note rather than rewriting history.
   and `noImplicitAny` are off, so the `string | null` unions throughout `src/domain/types.ts`
   are unenforced. This deviates from the Vite react-ts template default. Write new code as if
   strict were on.
-- No test framework anywhere, and `npm run lint` is red by default (see Commands). Between them
-  there is currently **no green regression gate** — behavior changes must be verified by running
-  the app.
-- An unknown badge tap writes **no audit event** —
-  [SessionContext.tsx:54-60](src/session/SessionContext.tsx#L54-L60) sets state and plays a tone
-  only. A real gap for a compliance tool.
+- Automated tests reach only the pure domain functions and the Rust commands (see **The
+  gates**). The verification hook, the stores and every component are untested — behavior
+  changes there must be verified by running the app.
+- An unknown badge tap writes **no audit event** — `handleBadge`
+  ([SessionContext.tsx:184-201](src/session/SessionContext.tsx#L184-L201)) returns `'unknown'`
+  and nothing is logged. A real gap for a compliance tool.
 - [csv.ts](src/data/csv.ts) is a legacy barrel over [csvMapping.ts](src/data/csvMapping.ts).
   The D365 panel is the only CSV import UI. A saved column layout goes straight to preview;
   mapping is the fallback when that layout does not fit the file.
@@ -168,7 +187,6 @@ append-only, so this adds a note rather than rewriting history.
 - Vite is pinned to `127.0.0.1:5173` (`strictPort`) so the Tauri `devUrl` and
   `Start Label Verification.bat` stay aligned. If 5173 is taken, the desktop app
   fails to start rather than silently using another port.
-- StrictMode double-mount can double-seed the queue via two interleaved `syncPageQueue` passes.
 - `autoAdvanceMs` is still editable under Admin → Settings but **no longer does anything**. It
   timed the auto-advance after a single-batch verify; an open order advances between members
   immediately and holds at `complete` until a badge taps or the operator cancels.
@@ -317,15 +335,23 @@ the usual D365 export previews the same way every time. Mapping opens only when 
 column cannot be found, or when someone presses **Edit column mapping** because the preview
 looks wrong. Confirming an import saves that layout.
 
-### Why there are two Rust commands and not the `fs` plugin
+### Why narrow Rust commands and not the `fs` plugin
 
-The frontend has no filesystem access at all. [drop_folder.rs](src-tauri/src/drop_folder.rs)
-adds exactly two commands, `list_drop_folder` and `read_drop_file`, registered in
-[lib.rs](src-tauri/src/lib.rs). The `fs` plugin wants its allowed paths declared in a capability
-file at build time, but the folder here is typed in by a supervisor at runtime — which would
-mean granting a broad static scope. Two narrow commands are less machinery and a smaller hole.
-`read_drop_file` takes folder and name **separately** and rejects a name containing a separator,
-`..`, or `:`, so the frontend cannot ask for a path outside the configured folder.
+The frontend has no filesystem access at all. Every file it touches goes through a named command
+registered in [lib.rs](src-tauri/src/lib.rs) that does exactly one thing:
+
+- [drop_folder.rs](src-tauri/src/drop_folder.rs): `list_drop_folder`, `read_drop_file`,
+  `write_inbox_status` (only `station-status.json`), `list_inbox_requests` and
+  `delete_inbox_request` (only `hide|show|remove-<uuid>.request` names), `station_host_name`.
+- [data_location.rs](src-tauri/src/data_location.rs): `shared_data_dir`, `promote_migrated_db`
+  (fixed paths, no arguments).
+- [scanner.rs](src-tauri/src/scanner.rs): `list_scanner_ports`, `start_scanner`, `stop_scanner`.
+
+The `fs` plugin wants its allowed paths declared in a capability file at build time, but the
+folder here is typed in by a supervisor at runtime — which would mean granting a broad static
+scope. Narrow commands are less machinery and a smaller hole. Anything that takes a name takes
+folder and name **separately** and rejects a separator, `..`, or `:`, so the frontend cannot
+ask for a path outside the configured folder. Keep new commands to that shape.
 
 ### Label scanner CDC
 
@@ -383,7 +409,8 @@ while an HTTP source has nothing to watch at all.
 
 ## Testing without printed labels
 
-There is no automated test runner. Floor-style testing uses the real control flow:
+Vitest covers the domain rules, not the checkout flow itself. Floor-style testing uses the real
+control flow:
 
 1. Import a D365 CSV (sample: **Load sample export** in the D365 panel, or choose your own file).
 2. Enroll a badge in Admin; sign in.

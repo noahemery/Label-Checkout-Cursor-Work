@@ -220,7 +220,7 @@ export function parsePayload(input: string, badgePattern: string): ParsedPayload
   const printed = parsePrintedRoll(cleaned, input);
   if (printed) return printed;
 
-  let badgeRe: RegExp | null = null;
+  let badgeRe: RegExp | null;
   try {
     badgeRe = new RegExp(badgePattern);
   } catch {

@@ -25,6 +25,12 @@ jobs:
       - name: Install npm packages
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
+      - name: TypeScript tests (Vitest)
+        run: npm test
+
       # Also produces dist/, which the Tauri crate requires before it compiles.
       - name: Build frontend (tsc + vite)
         run: npm run build
@@ -37,5 +43,3 @@ jobs:
 
       - name: Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
-
-      # npm run lint is left out until its pre-existing baseline (see AGENTS.md) is cleared.

@@ -250,7 +250,7 @@ export class SqliteStore implements DataStore {
     try {
       location = await invoke<DataLocation>('shared_data_dir');
     } catch (err) {
-      throw new Error(errorText(err));
+      throw new Error(errorText(err), { cause: err });
     }
 
     let migratedFrom: string | null = null;
@@ -261,6 +261,7 @@ export class SqliteStore implements DataStore {
         throw new Error(
           `Could not copy this account's existing data from ${location.legacyDbPath} into ` +
             `${location.dbPath}. Nothing was changed; the original file is still there. (${errorText(err)})`,
+          { cause: err },
         );
       }
       migratedFrom = location.legacyDbPath;
@@ -507,7 +508,7 @@ export class SqliteStore implements DataStore {
     } catch (err) {
       // The unique index is the real guard — the check above only improves the message.
       const again = await this.getOperatorByBadge(badgeId);
-      if (again) throw new Error(`Badge already enrolled to ${again.name}`);
+      if (again) throw new Error(`Badge already enrolled to ${again.name}`, { cause: err });
       throw err;
     }
     return operator;
