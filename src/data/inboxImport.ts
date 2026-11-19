@@ -145,7 +145,7 @@ async function importOne(
       };
     }
 
-    const resolved = mappingForHeaders(peeked.headers, loadSavedColumnMapping());
+    const resolved = mappingForHeaders(peeked.headers, await loadSavedColumnMapping(input.store));
     if (resolved.source === 'unmapped') {
       return {
         lastImport: {

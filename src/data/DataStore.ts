@@ -104,4 +104,7 @@ export interface DataStore {
    * callers must check for the method rather than assume it.
    */
   snapshotTo?(absolutePath: string): Promise<void>;
+
+  /** Absolute path of the database file. Only the SQLite store has one. */
+  readonly databasePath?: string;
 }

@@ -199,6 +199,33 @@ IndexedDB v11) and stamps every row added that import with `batch.importId`.
   delivery first (`lvs-queue-sort` in localStorage; alternate: sort by sheet / import time).
 - Flagged families always sort to the top regardless of the user's sort mode.
 
+## Where the database lives
+
+The desktop database is `C:\ProgramData\LabelVerification\label-verification.db`, **one file
+for every Windows account on the machine**. The AIO runs under a shared Label Room login, and
+a trial run under someone else's login must carry straight over, so the data cannot live in a
+per-account profile.
+
+- [data_location.rs](src-tauri/src/data_location.rs) `shared_data_dir` creates the folder,
+  proves this account can write to it, and reports the path. `SqliteStore.open()` loads it by
+  absolute path (`tauri-plugin-sql` joins with `PathBuf::push`, so an absolute path replaces
+  the app config dir). There is no `preload` in `tauri.conf.json` — that would create an empty
+  per-account file.
+- ProgramData lets other accounts read a file but not write it by default.
+  [windows/hooks.nsh](src-tauri/windows/hooks.nsh) grants the local Users group modify rights
+  at install. There is **no uninstall hook on purpose**: uninstalling must never take the audit
+  trail with it.
+- If the folder is not writable, startup **fails with the folder named**. Do not add a fallback
+  to a per-account database — that silently splits the history in two.
+- **One-time migration.** Up to 0.4.3 the file lived in each account's
+  `%APPDATA%\com.alltech.labelverification`. If the shared file does not exist yet and this
+  account has the old one, it is copied with `VACUUM INTO` to `label-verification.db.migrating`
+  and only then renamed into place by `promote_migrated_db`, which refuses to replace an
+  existing database. A copy that dies part way is deleted on the next launch and never looks
+  like real data. The old file is left untouched, and `lvs-db-migrated-from` records where the
+  data came from (shown under Admin → Settings). Whichever account launches 0.4.4 first seeds
+  the shared file; every later account joins it.
+
 ## Getting data off a single station
 
 There is no server yet. Everything a station knows lives in its own SQLite file, so the two
@@ -398,8 +425,14 @@ re-import can replace the log.
 - All `localStorage` keys are `lvs-`-prefixed (e.g. `lvs-settings`,
   [settings.ts](src/config/settings.ts)). Browser `npm run dev` keeps batches, operators,
   and audit in IndexedDB (`label-verification`). Desktop stores those plus settings in
-  SQLite (`label-verification.db` under the app config dir). Settings are dual-written
+  SQLite (see **Where the database lives**). Settings are dual-written
   so a first desktop launch can pick up values already in `localStorage`.
+- **Shared station setup goes in the store's settings, not `localStorage`.** `localStorage`
+  belongs to one Windows account, so anything the station needs under whichever login is
+  running it — settings, folders, the inbox ledger, the CSV column layout
+  (`lvs-csv-column-mapping`) — is read and written through `store.getSetting` /
+  `setSetting`. Only per-person UI state (queue sort, the shift sign-in session, the last
+  import banner) stays in `localStorage`.
 - Sounds are gated at each call site — [sounds.ts](src/audio/sounds.ts) has no internal gate.
   Verify and mismatch use `soundEnabled`. Sign-out uses `signOutSoundEnabled`, which defaults
   to off and never plays on launch.

@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import Database from '@tauri-apps/plugin-sql';
 import { normalizeId } from '../domain/normalize';
 import { buildReferenceQrPayload } from '../domain/referenceQr';
@@ -11,14 +12,16 @@ import type {
   ImportMeta,
   ImportResult,
 } from './DataStore';
+import { DB_MIGRATED_KEY } from './dataLocation';
 import type { RosterImportResult } from './roster';
 import { SCHEMA_STATEMENTS, SCHEMA_VERSION, WAL_PRAGMA } from './sqliteSchema';
 
 /**
  * SQLite-backed DataStore for the desktop build.
  *
- * The file lives in the Tauri app data directory, so backing the station up is
- * copying one file. Bind placeholders are `$1`-style, which is what the SQLite
+ * The file lives in %ProgramData%\LabelVerification, shared by every Windows
+ * account on the machine, so a different login sees the same batches, roster
+ * and audit trail. Bind placeholders are `$1`-style, which is what the SQLite
  * driver behind tauri-plugin-sql expects.
  *
  * Writes are ordered so a failure part way through leaves recoverable state
@@ -26,7 +29,36 @@ import { SCHEMA_STATEMENTS, SCHEMA_VERSION, WAL_PRAGMA } from './sqliteSchema';
  * owns, and both import and page-wipe are safe to run again.
  */
 
-const DB_FILE = 'sqlite:label-verification.db';
+/** Resolved by tauri-plugin-sql against this account's app config dir — the 0.4.3-and-earlier location. */
+const LEGACY_DB_URL = 'sqlite:label-verification.db';
+
+interface DataLocation {
+  dir: string;
+  dbPath: string;
+  dbExists: boolean;
+  migratingPath: string;
+  legacyDbPath: string;
+  legacyExists: boolean;
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Copy this account's old database into the shared folder. Only runs when the
+ * shared one does not exist yet, so whichever account launches 0.4.4 first
+ * seeds it and later accounts join it. The old file is left untouched.
+ */
+async function copyLegacyDatabase(location: DataLocation): Promise<void> {
+  const legacy = await Database.load(LEGACY_DB_URL);
+  try {
+    await legacy.execute(`VACUUM INTO $1`, [location.migratingPath]);
+  } finally {
+    await legacy.close().catch(() => null);
+  }
+  await invoke('promote_migrated_db');
+}
 
 interface BatchRow {
   id: string;
@@ -205,14 +237,36 @@ const INSERT_BATCH_PLACEHOLDERS = Array.from({ length: 22 }, (_, i) => `$${i + 1
 
 export class SqliteStore implements DataStore {
   private readonly db: Database;
+  readonly databasePath: string;
 
-  private constructor(db: Database) {
+  private constructor(db: Database, databasePath: string) {
     this.db = db;
+    this.databasePath = databasePath;
   }
 
-  /** Open the database file and bring the schema up to date. */
+  /** Open the shared database file and bring the schema up to date. */
   static async open(): Promise<SqliteStore> {
-    const db = await Database.load(DB_FILE);
+    let location: DataLocation;
+    try {
+      location = await invoke<DataLocation>('shared_data_dir');
+    } catch (err) {
+      throw new Error(errorText(err));
+    }
+
+    let migratedFrom: string | null = null;
+    if (!location.dbExists && location.legacyExists) {
+      try {
+        await copyLegacyDatabase(location);
+      } catch (err) {
+        throw new Error(
+          `Could not copy this account's existing data from ${location.legacyDbPath} into ` +
+            `${location.dbPath}. Nothing was changed; the original file is still there. (${errorText(err)})`,
+        );
+      }
+      migratedFrom = location.legacyDbPath;
+    }
+
+    const db = await Database.load(`sqlite:${location.dbPath}`);
     // journal_mode returns a row, so this has to be select, not execute.
     await db.select(WAL_PRAGMA);
     for (const statement of SCHEMA_STATEMENTS) {
@@ -237,7 +291,11 @@ export class SqliteStore implements DataStore {
          ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
       [String(SCHEMA_VERSION)],
     );
-    return new SqliteStore(db);
+    const store = new SqliteStore(db, location.dbPath);
+    if (migratedFrom) {
+      await store.setSetting(DB_MIGRATED_KEY, JSON.stringify({ from: migratedFrom, at: nowIso() }));
+    }
+    return store;
   }
 
   // ---- Batches -------------------------------------------------------

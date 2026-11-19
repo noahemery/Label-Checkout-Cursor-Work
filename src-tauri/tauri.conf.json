@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Label Verification",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "identifier": "com.alltech.labelverification",
   "build": {
     "frontendDist": "../dist",
@@ -32,7 +32,8 @@
     "targets": ["nsis"],
     "windows": {
       "nsis": {
-        "installMode": "perMachine"
+        "installMode": "perMachine",
+        "installerHooks": "./windows/hooks.nsh"
       }
     },
     "icon": [
@@ -44,8 +45,6 @@
     ]
   },
   "plugins": {
-    "sql": {
-      "preload": ["sqlite:label-verification.db"]
-    }
+    "sql": {}
   }
 }

@@ -71,7 +71,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [headers, setHeaders] = useState<string[]>([]);
-  const [mapping, setMapping] = useState<ColumnMapping>(() => loadSavedColumnMapping());
+  const [mapping, setMapping] = useState<ColumnMapping>({});
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [step, setStep] = useState<ImportStep>('mapping');
@@ -120,7 +120,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
           setError(errors[0] ?? 'Could not read column headers from that file.');
           return;
         }
-        const saved = loadSavedColumnMapping();
+        const saved = await loadSavedColumnMapping(store);
         const resolved = mappingForHeaders(h, saved);
         setHeaders(h);
         setMapping(resolved.mapping);
@@ -215,7 +215,7 @@ export function D365UploadPanel({ onOpenTestLabels }: { onOpenTestLabels?: () =>
     setError(null);
     void (async () => {
       try {
-        saveColumnMapping(mapping);
+        await saveColumnMapping(store, mapping);
         const result = await store.importBatches(activePageId, analysis.rows, {
           filename: pendingFile.name,
         });

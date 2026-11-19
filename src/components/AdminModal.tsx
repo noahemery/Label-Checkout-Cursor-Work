@@ -22,6 +22,7 @@ import {
   runDailyBackup,
   type BackupStatusRecord,
 } from '../data/backup';
+import { DB_MIGRATED_KEY, parseDbMigration, type DbMigrationRecord } from '../data/dataLocation';
 import { DROP_FOLDER_KEY, FolderSource } from '../data/dropFolder';
 import { downloadRoster, parseRosterFile, summarizeRosterImport } from '../data/roster';
 import { useSheetPage } from '../data/SheetPageContext';
@@ -601,8 +602,10 @@ function SettingsTab() {
   const [scannerListError, setScannerListError] = useState<string | null>(null);
   const [cdcLiveStatus, setCdcLiveStatus] = useState<string | null>(null);
   const [portsBusy, setPortsBusy] = useState(false);
+  const [dbMigration, setDbMigration] = useState<DbMigrationRecord | null>(null);
 
   useEffect(() => {
+    void store.getSetting(DB_MIGRATED_KEY).then((v) => setDbMigration(parseDbMigration(v)));
     void store.getSetting(BACKUP_FOLDER_KEY).then((v) => setBackupFolder(v ?? ''));
     void store.getSetting(BACKUP_LAST_STATUS_KEY).then((v) => setBackupStatus(parseBackupStatus(v)));
     void store.getSetting(DROP_FOLDER_KEY).then((v) => setDropFolder(v ?? ''));
@@ -698,10 +701,19 @@ function SettingsTab() {
         {storeKind === 'sqlite' ? (
           <>
             Running on SQLite. The database file is{' '}
-            <code>label-verification.db</code> under{' '}
-            <code>%APPDATA%\com.alltech.labelverification</code>. Installing a new
-            version of the app does not touch it — only uninstalling or losing the
-            machine does.
+            <code>{store.databasePath ?? 'label-verification.db'}</code>. Every Windows
+            account on this computer opens the same file, so signing in under another
+            login shows the same batches, badges and audit trail. Installing a new
+            version or uninstalling the app does not touch it — only losing the machine
+            does.
+            {dbMigration ? (
+              <>
+                {' '}
+                Copied from <code>{dbMigration.from}</code> on{' '}
+                {new Date(dbMigration.at).toLocaleString()}; that older file was left in
+                place.
+              </>
+            ) : null}
           </>
         ) : (
           <>
@@ -729,7 +741,10 @@ function SettingsTab() {
             disabled={storeKind !== 'sqlite'}
           />
           <span className="admin-hint">
-            Leave empty to turn backups off. The folder must already exist.
+            Leave empty to turn backups off. The folder must already exist. Use a full
+            network path (<code>\\server\share\folder</code>) or a USB drive letter — a
+            mapped drive letter like <code>S:</code> only exists for the account that
+            mapped it.
           </span>
         </label>
         <div className="admin-roster-actions">
